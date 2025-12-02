@@ -1,0 +1,275 @@
+.winner-showcase {
+  text-align: center;
+  margin: 40px 0;
+  padding: 40px 20px;
+  background: rgba(0, 0, 0, 0.8);
+  border: 4px solid #00ff00;
+  box-shadow: 
+    0 0 30px rgba(0, 255, 0, 0.8),
+    inset 0 0 30px rgba(0, 255, 0, 0.2);
+  position: relative;
+  overflow: hidden;
+}
+
+.winner-showcase::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(0, 255, 0, 0.1),
+    transparent
+  );
+  animation: winner-scan 3s infinite;
+}
+
+@keyframes winner-scan {
+  0% { left: -100%; }
+  100% { left: 100%; }
+}
+
+.winner-announcement {
+  margin-bottom: 30px;
+  position: relative;
+  z-index: 1;
+}
+
+.winner-label {
+  font-family: 'VT323', monospace;
+  font-size: 2.5rem;
+  color: #ff00ff;
+  text-shadow: 
+    0 0 10px #ff00ff,
+    0 0 20px #ff00ff;
+  margin-bottom: 20px;
+  letter-spacing: 4px;
+  animation: pulse-label 2s infinite;
+}
+
+@keyframes pulse-label {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+.winner-name {
+  font-family: 'Press Start 2P', cursive;
+  font-size: 3rem;
+  color: #00ff00;
+  text-shadow: 
+    0 0 20px #00ff00,
+    0 0 40px #00ff00,
+    0 0 60px #00ff00;
+  margin: 20px 0;
+  letter-spacing: 4px;
+  line-height: 1.5;
+  position: relative;
+}
+
+.glitch-winner {
+  animation: glitch-winner 3s infinite;
+}
+
+.glitch-winner::before,
+.glitch-winner::after {
+  content: attr(data-text);
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.glitch-winner::before {
+  left: 3px;
+  text-shadow: -3px 0 #ff00ff;
+  clip: rect(44px, 9999px, 56px, 0);
+  animation: glitch-winner-anim 5s infinite linear alternate-reverse;
+}
+
+.glitch-winner::after {
+  left: -3px;
+  text-shadow: 3px 0 #00ffff;
+  clip: rect(44px, 9999px, 56px, 0);
+  animation: glitch-winner-anim 1s infinite linear alternate-reverse;
+}
+
+@keyframes glitch-winner {
+  0%, 100% { transform: translate(0); }
+  20% { transform: translate(-3px, 3px); }
+  40% { transform: translate(-3px, -3px); }
+  60% { transform: translate(3px, 3px); }
+  80% { transform: translate(3px, -3px); }
+}
+
+@keyframes glitch-winner-anim {
+  0% { clip: rect(31px, 9999px, 94px, 0); }
+  20% { clip: rect(54px, 9999px, 66px, 0); }
+  40% { clip: rect(28px, 9999px, 98px, 0); }
+  60% { clip: rect(67px, 9999px, 34px, 0); }
+  80% { clip: rect(23px, 9999px, 85px, 0); }
+  100% { clip: rect(76px, 9999px, 12px, 0); }
+}
+
+.winner-image-container {
+  position: relative;
+  max-width: 600px;
+  margin: 30px auto;
+  border: 4px solid #00ff00;
+  box-shadow: 
+    0 0 30px rgba(0, 255, 0, 0.8),
+    inset 0 0 30px rgba(0, 255, 0, 0.2);
+  overflow: hidden;
+}
+
+.winner-image {
+  width: 100%;
+  height: auto;
+  display: block;
+  filter: brightness(0.9) contrast(1.1);
+}
+
+.image-scanner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 255, 0, 0.8),
+    transparent
+  );
+  animation: scanner-move 3s infinite;
+  box-shadow: 0 0 20px #00ff00;
+}
+
+@keyframes scanner-move {
+  0% { top: 0; opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { top: 100%; opacity: 1; }
+}
+
+.winner-info {
+  margin: 30px 0;
+  position: relative;
+  z-index: 1;
+}
+
+.vote-count-display {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 20px 0;
+}
+
+.vote-count-number {
+  font-family: 'Press Start 2P', cursive;
+  font-size: 4rem;
+  color: #ff00ff;
+  text-shadow: 
+    0 0 20px #ff00ff,
+    0 0 40px #ff00ff;
+  line-height: 1;
+  animation: number-pulse 2s infinite;
+}
+
+@keyframes number-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
+.vote-count-text {
+  font-family: 'VT323', monospace;
+  font-size: 2rem;
+  color: rgba(255, 0, 255, 0.8);
+  margin-top: 10px;
+  letter-spacing: 3px;
+}
+
+.play-date {
+  font-family: 'VT323', monospace;
+  font-size: 2rem;
+  color: #00ffff;
+  text-shadow: 0 0 10px #00ffff;
+  margin: 20px 0;
+  letter-spacing: 2px;
+}
+
+.play-date-full {
+  font-family: 'VT323', monospace;
+  font-size: 1.5rem;
+  color: rgba(0, 255, 255, 0.8);
+  margin: 10px 0;
+}
+
+.discord-invite {
+  margin: 40px 0;
+  padding: 30px;
+  background: rgba(88, 101, 242, 0.1);
+  border: 3px solid #5865f2;
+  box-shadow: 0 0 20px rgba(88, 101, 242, 0.5);
+  position: relative;
+  z-index: 1;
+}
+
+.discord-title {
+  font-family: 'VT323', monospace;
+  font-size: 2rem;
+  color: #5865f2;
+  text-shadow: 0 0 10px #5865f2;
+  margin-bottom: 20px;
+  letter-spacing: 2px;
+}
+
+.discord-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 30px;
+  font-family: 'VT323', monospace;
+  font-size: 1.8rem;
+  background: #5865f2;
+  color: #ffffff;
+  text-decoration: none;
+  border: 2px solid #ffffff;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  transition: all 0.3s;
+  box-shadow: 0 0 15px rgba(88, 101, 242, 0.8);
+}
+
+.discord-button:hover {
+  background: #4752c4;
+  box-shadow: 0 0 25px rgba(88, 101, 242, 1);
+  transform: scale(1.05);
+}
+
+.discord-icon {
+  font-size: 2rem;
+}
+
+.no-winner {
+  font-family: 'VT323', monospace;
+  font-size: 2rem;
+  color: rgba(0, 255, 0, 0.7);
+  margin: 20px 0;
+}
+
+@media (max-width: 768px) {
+  .winner-name {
+    font-size: 2rem;
+  }
+  
+  .vote-count-number {
+    font-size: 3rem;
+  }
+  
+  .play-date {
+    font-size: 1.5rem;
+  }
+}
+

@@ -1,0 +1,141 @@
+.countdown-container {
+  text-align: center;
+  margin: 30px 0;
+  padding: 30px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 3px solid #ff00ff;
+  box-shadow: 
+    0 0 20px rgba(255, 0, 255, 0.6),
+    inset 0 0 20px rgba(255, 0, 255, 0.1);
+  position: relative;
+  overflow: hidden;
+}
+
+.countdown-container::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 10px,
+    rgba(255, 0, 255, 0.02) 10px,
+    rgba(255, 0, 255, 0.02) 20px
+  );
+  animation: countdown-scan 15s linear infinite;
+}
+
+@keyframes countdown-scan {
+  0% { transform: translate(0, 0); }
+  100% { transform: translate(50px, 50px); }
+}
+
+.countdown-label {
+  font-family: 'VT323', monospace;
+  font-size: 2rem;
+  color: #ff00ff;
+  text-shadow: 0 0 10px #ff00ff;
+  margin-bottom: 20px;
+  letter-spacing: 3px;
+  position: relative;
+  z-index: 1;
+}
+
+.countdown-display {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 15px;
+  margin: 20px 0;
+  position: relative;
+  z-index: 1;
+}
+
+.time-unit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 15px 20px;
+  background: rgba(0, 0, 0, 0.8);
+  border: 2px solid #ff00ff;
+  min-width: 100px;
+  box-shadow: 
+    0 0 15px rgba(255, 0, 255, 0.5),
+    inset 0 0 10px rgba(255, 0, 255, 0.1);
+}
+
+.time-value {
+  font-family: 'Press Start 2P', cursive;
+  font-size: 2.5rem;
+  color: #00ffff;
+  text-shadow: 
+    0 0 10px #00ffff,
+    0 0 20px #00ffff;
+  line-height: 1;
+  margin-bottom: 10px;
+  animation: number-flip 1s ease-in-out;
+}
+
+@keyframes number-flip {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
+.time-label {
+  font-family: 'VT323', monospace;
+  font-size: 1.2rem;
+  color: rgba(255, 0, 255, 0.8);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.time-separator {
+  font-family: 'Press Start 2P', cursive;
+  font-size: 2rem;
+  color: #ff00ff;
+  text-shadow: 0 0 10px #ff00ff;
+  animation: blink-separator 1s infinite;
+}
+
+@keyframes blink-separator {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.countdown-date {
+  font-family: 'VT323', monospace;
+  font-size: 1.5rem;
+  color: rgba(255, 0, 255, 0.8);
+  margin-top: 20px;
+  position: relative;
+  z-index: 1;
+  letter-spacing: 1px;
+}
+
+@media (max-width: 768px) {
+  .countdown-display {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  
+  .time-unit {
+    min-width: 80px;
+    padding: 10px 15px;
+  }
+  
+  .time-value {
+    font-size: 1.8rem;
+  }
+  
+  .time-separator {
+    font-size: 1.5rem;
+  }
+  
+  .countdown-label {
+    font-size: 1.5rem;
+  }
+}
+

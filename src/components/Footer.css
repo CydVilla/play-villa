@@ -1,0 +1,62 @@
+.app-footer {
+  margin-top: 60px;
+  padding: 30px 20px;
+  border-top: 2px solid rgba(0, 255, 0, 0.3);
+  text-align: center;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.footer-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+}
+
+.footer-text {
+  font-family: 'VT323', monospace;
+  font-size: 1.3rem;
+  color: rgba(0, 255, 0, 0.7);
+  letter-spacing: 1px;
+}
+
+.donation-link {
+  font-family: 'VT323', monospace;
+  font-size: 1.5rem;
+  color: #00ff00;
+  text-decoration: none;
+  padding: 10px 20px;
+  border: 2px solid #00ff00;
+  background: rgba(0, 255, 0, 0.1);
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  transition: all 0.3s;
+  display: inline-block;
+  box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
+}
+
+.donation-link:hover {
+  background: rgba(0, 255, 0, 0.2);
+  box-shadow: 0 0 20px rgba(0, 255, 0, 0.6);
+  transform: scale(1.05);
+}
+
+.copyright-text {
+  font-family: 'VT323', monospace;
+  font-size: 1.1rem;
+  color: rgba(0, 255, 0, 0.5);
+  letter-spacing: 1px;
+  margin-top: 10px;
+}
+
+@media (max-width: 768px) {
+  .footer-text {
+    font-size: 1.1rem;
+  }
+  
+  .donation-link {
+    font-size: 1.3rem;
+    padding: 8px 16px;
+  }
+}
+
