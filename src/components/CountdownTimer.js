@@ -1,10 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import './CountdownTimer.css';
 
 const CountdownTimer = ({ endTime }) => {
-  const [timeLeft, setTimeLeft] = useState(calculateTimeLeft());
-
-  function calculateTimeLeft() {
+  const calculateTimeLeft = useCallback(() => {
     const now = new Date().getTime();
     const end = new Date(endTime).getTime();
     const difference = end - now;
@@ -19,7 +17,9 @@ const CountdownTimer = ({ endTime }) => {
       minutes: Math.floor((difference % (1000 * 60 * 60)) / (1000 * 60)),
       seconds: Math.floor((difference % (1000 * 60)) / 1000)
     };
-  }
+  }, [endTime]);
+
+  const [timeLeft, setTimeLeft] = useState(() => calculateTimeLeft());
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -27,7 +27,7 @@ const CountdownTimer = ({ endTime }) => {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [endTime]);
+  }, [calculateTimeLeft]);
 
   const formatTime = (value) => {
     return value.toString().padStart(2, '0');
