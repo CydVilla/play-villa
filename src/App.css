@@ -175,6 +175,37 @@
   100% { transform: translateY(100px); }
 }
 
+/* Dev Tools */
+.dev-tools {
+  margin: 20px 0;
+  text-align: center;
+}
+
+.dev-end-voting-btn {
+  padding: 12px 24px;
+  font-family: 'VT323', monospace;
+  font-size: 1.5rem;
+  background: rgba(255, 0, 0, 0.2);
+  border: 3px solid #ff0000;
+  color: #ff0000;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  transition: all 0.3s;
+  box-shadow: 0 0 10px rgba(255, 0, 0, 0.3);
+}
+
+.dev-end-voting-btn:hover:not(:disabled) {
+  background: rgba(255, 0, 0, 0.4);
+  box-shadow: 0 0 20px rgba(255, 0, 0, 0.6);
+  transform: scale(1.05);
+}
+
+.dev-end-voting-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 @media (max-width: 768px) {
   .vhs-title {
     font-size: 1.8rem;

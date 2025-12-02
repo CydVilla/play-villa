@@ -67,8 +67,8 @@ const sendDiscordWebhook = async (winner, votingEndTime) => {
   
   if (!webhookUrl || !winner) return;
 
-  const nextSaturday = new Date(votingEndTime);
-  nextSaturday.setDate(nextSaturday.getDate() + 7);
+  // votingEndTime is already Saturday at midnight (the play date)
+  const playDate = new Date(votingEndTime);
   
   const amazonLink = generateAmazonLink(winner.name);
 
@@ -84,7 +84,7 @@ const sendDiscordWebhook = async (winner, votingEndTime) => {
       },
       {
         name: "📅 Play Date",
-        value: nextSaturday.toLocaleDateString('en-US', { 
+        value: playDate.toLocaleDateString('en-US', { 
           weekday: 'long', 
           month: 'long', 
           day: 'numeric' 
@@ -260,6 +260,27 @@ function App() {
     localStorage.removeItem(`playVillaVote_${userId}`);
   };
 
+  // Dev mode: Manually end voting and determine winner
+  const handleManualEndVoting = () => {
+    if (games.length === 0) {
+      alert('No games to vote on!');
+      return;
+    }
+
+    setIsVotingEnded(true);
+    const sortedGames = [...games].sort((a, b) => b.votes - a.votes);
+    const winnerGame = sortedGames[0];
+    setWinner(winnerGame);
+    
+    // Save winner to history
+    saveWinnerToHistory(winnerGame, votingEndTime);
+    
+    // Send Discord webhook notification
+    sendDiscordWebhook(winnerGame, votingEndTime);
+  };
+
+  const isDevelopment = process.env.NODE_ENV === 'development';
+
   return (
     <div className="App">
       <div className="vhs-container">
@@ -273,6 +294,17 @@ function App() {
         {!isVotingEnded ? (
           <>
             <CountdownTimer endTime={votingEndTime} />
+            {isDevelopment && (
+              <div className="dev-tools">
+                <button 
+                  className="dev-end-voting-btn"
+                  onClick={handleManualEndVoting}
+                  disabled={games.length === 0}
+                >
+                  🔧 DEV: END VOTING NOW
+                </button>
+              </div>
+            )}
             <GameSearch onGameSubmit={handleGameSubmit} existingGames={games} />
             {userVote && (
               <div className="user-vote-info">

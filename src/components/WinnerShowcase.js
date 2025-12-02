@@ -64,8 +64,8 @@ const WinnerShowcase = ({ winner, votingEndTime }) => {
     );
   }
 
-  const nextSaturday = new Date(votingEndTime);
-  nextSaturday.setDate(nextSaturday.getDate() + 7); // Next Saturday
+  // votingEndTime is already Saturday at midnight (the play date)
+  const playDate = new Date(votingEndTime);
   const amazonLink = generateAmazonLink(winner.name);
   const resetTime = getNextSunday(new Date());
 
@@ -94,7 +94,7 @@ const WinnerShowcase = ({ winner, votingEndTime }) => {
           PLAY ALL DAY SATURDAY
         </p>
         <p className="play-date-full">
-          {nextSaturday.toLocaleDateString('en-US', { 
+          {playDate.toLocaleDateString('en-US', { 
             weekday: 'long', 
             year: 'numeric', 
             month: 'long', 
@@ -165,7 +165,7 @@ const WinnerShowcase = ({ winner, votingEndTime }) => {
         </a>
       </div>
 
-      <CalendarIntegration gameName={winner.name} gameDate={nextSaturday} />
+      <CalendarIntegration gameName={winner.name} gameDate={playDate} />
     </div>
   );
 };
