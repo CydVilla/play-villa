@@ -4,6 +4,7 @@ import GameSearch from './components/GameSearch';
 import VotingList from './components/VotingList';
 import CountdownTimer from './components/CountdownTimer';
 import WinnerShowcase from './components/WinnerShowcase';
+import WinnersHistory from './components/WinnersHistory';
 import Footer from './components/Footer';
 
 // Get or create unique user ID
@@ -27,6 +28,39 @@ const getNextSaturday = () => {
   return nextSaturday;
 };
 
+// Generate Amazon affiliate link for a game
+const generateAmazonLink = (gameName) => {
+  const storeId = process.env.REACT_APP_AMAZON_STORE_ID;
+  if (!storeId) return null;
+  
+  // Clean game name for search
+  const searchQuery = encodeURIComponent(gameName + ' video game');
+  return `https://www.amazon.com/s?k=${searchQuery}&tag=${storeId}`;
+};
+
+// Save winner to history
+const saveWinnerToHistory = (winner, votingEndTime) => {
+  const winnersHistory = JSON.parse(localStorage.getItem('playVillaWinnersHistory') || '[]');
+  const amazonLink = generateAmazonLink(winner.name);
+  
+  const winnerEntry = {
+    id: Date.now(),
+    gameName: winner.name,
+    votes: winner.votes,
+    image: winner.image,
+    dateWon: new Date().toISOString(),
+    playDate: new Date(votingEndTime).toISOString(),
+    amazonLink: amazonLink
+  };
+  
+  winnersHistory.unshift(winnerEntry); // Add to beginning
+  // Keep only last 50 winners
+  const limitedHistory = winnersHistory.slice(0, 50);
+  localStorage.setItem('playVillaWinnersHistory', JSON.stringify(limitedHistory));
+  
+  return winnerEntry;
+};
+
 // Function to send winner announcement to Discord
 const sendDiscordWebhook = async (winner, votingEndTime) => {
   const webhookUrl = process.env.REACT_APP_DISCORD_WEBHOOK_URL;
@@ -35,6 +69,8 @@ const sendDiscordWebhook = async (winner, votingEndTime) => {
 
   const nextSaturday = new Date(votingEndTime);
   nextSaturday.setDate(nextSaturday.getDate() + 7);
+  
+  const amazonLink = generateAmazonLink(winner.name);
 
   const embed = {
     title: "🎮 PLAY VILLA - WINNER ANNOUNCED! 🎮",
@@ -61,6 +97,15 @@ const sendDiscordWebhook = async (winner, votingEndTime) => {
     },
     timestamp: new Date().toISOString()
   };
+
+  // Add Amazon link field if available
+  if (amazonLink) {
+    embed.fields.push({
+      name: "🛒 Get on Amazon",
+      value: `[Buy ${winner.name}](${amazonLink})`,
+      inline: false
+    });
+  }
 
   // Add image if available
   if (winner.image) {
@@ -115,6 +160,9 @@ function App() {
           const sortedGames = [...games].sort((a, b) => b.votes - a.votes);
           const winnerGame = sortedGames[0];
           setWinner(winnerGame);
+          
+          // Save winner to history
+          saveWinnerToHistory(winnerGame, votingEndTime);
           
           // Send Discord webhook notification
           sendDiscordWebhook(winnerGame, votingEndTime);
@@ -222,7 +270,10 @@ function App() {
             />
           </>
         ) : (
-          <WinnerShowcase winner={winner} votingEndTime={votingEndTime} />
+          <>
+            <WinnerShowcase winner={winner} votingEndTime={votingEndTime} />
+            <WinnersHistory />
+          </>
         )}
 
         <Footer />

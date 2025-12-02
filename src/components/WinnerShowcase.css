@@ -206,6 +206,53 @@
   margin: 10px 0;
 }
 
+.amazon-link-section {
+  margin: 40px 0;
+  padding: 30px;
+  background: rgba(255, 153, 0, 0.1);
+  border: 3px solid #ff9900;
+  box-shadow: 0 0 20px rgba(255, 153, 0, 0.5);
+  position: relative;
+  z-index: 1;
+  text-align: center;
+}
+
+.amazon-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 30px;
+  font-family: 'VT323', monospace;
+  font-size: 1.8rem;
+  background: #ff9900;
+  color: #000000;
+  text-decoration: none;
+  border: 2px solid #ffffff;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  transition: all 0.3s;
+  box-shadow: 0 0 15px rgba(255, 153, 0, 0.8);
+  font-weight: bold;
+}
+
+.amazon-button:hover {
+  background: #ffaa00;
+  box-shadow: 0 0 25px rgba(255, 153, 0, 1);
+  transform: scale(1.05);
+}
+
+.amazon-icon {
+  font-size: 2rem;
+}
+
+.affiliate-disclosure {
+  font-family: 'VT323', monospace;
+  font-size: 1rem;
+  color: rgba(255, 153, 0, 0.7);
+  margin-top: 10px;
+  font-style: italic;
+}
+
 .discord-invite {
   margin: 40px 0;
   padding: 30px;

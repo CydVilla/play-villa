@@ -2,6 +2,16 @@ import React from 'react';
 import './WinnerShowcase.css';
 import CalendarIntegration from './CalendarIntegration';
 
+// Generate Amazon affiliate link for a game
+const generateAmazonLink = (gameName) => {
+  const storeId = process.env.REACT_APP_AMAZON_STORE_ID;
+  if (!storeId) return null;
+  
+  // Clean game name for search
+  const searchQuery = encodeURIComponent(gameName + ' video game');
+  return `https://www.amazon.com/s?k=${searchQuery}&tag=${storeId}`;
+};
+
 const WinnerShowcase = ({ winner, votingEndTime }) => {
   if (!winner) {
     return (
@@ -14,6 +24,7 @@ const WinnerShowcase = ({ winner, votingEndTime }) => {
 
   const nextSaturday = new Date(votingEndTime);
   nextSaturday.setDate(nextSaturday.getDate() + 7); // Next Saturday
+  const amazonLink = generateAmazonLink(winner.name);
 
   return (
     <div className="winner-showcase">
@@ -48,6 +59,21 @@ const WinnerShowcase = ({ winner, votingEndTime }) => {
           })}
         </p>
       </div>
+
+      {amazonLink && (
+        <div className="amazon-link-section">
+          <a
+            href={amazonLink}
+            target="_blank"
+            rel="noopener noreferrer sponsored"
+            className="amazon-button"
+          >
+            <span className="amazon-icon">🛒</span>
+            GET {winner.name.toUpperCase()} ON AMAZON
+          </a>
+          <p className="affiliate-disclosure">(Affiliate link - supports Play Villa)</p>
+        </div>
+      )}
 
       <div className="discord-invite">
         <h3 className="discord-title">JOIN THE COMMUNITY</h3>

@@ -1,0 +1,126 @@
+.winners-history-container {
+  margin: 40px 0;
+}
+
+.toggle-history-btn {
+  width: 100%;
+  padding: 15px 20px;
+  font-family: 'VT323', monospace;
+  font-size: 1.8rem;
+  background: rgba(0, 255, 255, 0.2);
+  border: 3px solid #00ffff;
+  color: #00ffff;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  transition: all 0.3s;
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+}
+
+.toggle-history-btn:hover {
+  background: rgba(0, 255, 255, 0.4);
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.6);
+  transform: translateY(-2px);
+}
+
+.winners-history {
+  margin-top: 20px;
+  padding: 30px;
+  background: rgba(0, 0, 0, 0.8);
+  border: 3px solid #00ffff;
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
+}
+
+.history-title {
+  font-family: 'Press Start 2P', cursive;
+  font-size: 1.5rem;
+  color: #00ffff;
+  text-shadow: 0 0 10px #00ffff;
+  text-align: center;
+  margin-bottom: 30px;
+  letter-spacing: 2px;
+}
+
+.winners-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 20px;
+}
+
+.history-winner-card {
+  background: rgba(0, 0, 0, 0.6);
+  border: 2px solid #00ffff;
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+  overflow: hidden;
+  transition: all 0.3s;
+}
+
+.history-winner-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 5px 20px rgba(0, 255, 255, 0.6);
+}
+
+.history-winner-image {
+  width: 100%;
+  height: 150px;
+  object-fit: cover;
+  border-bottom: 2px solid #00ffff;
+}
+
+.history-winner-info {
+  padding: 15px;
+}
+
+.history-game-name {
+  font-family: 'VT323', monospace;
+  font-size: 1.5rem;
+  color: #00ffff;
+  text-shadow: 0 0 5px #00ffff;
+  margin-bottom: 10px;
+  text-transform: uppercase;
+}
+
+.history-votes {
+  font-family: 'VT323', monospace;
+  font-size: 1.2rem;
+  color: #ff00ff;
+  margin-bottom: 5px;
+}
+
+.history-date {
+  font-family: 'VT323', monospace;
+  font-size: 1rem;
+  color: rgba(0, 255, 255, 0.7);
+  margin-bottom: 10px;
+}
+
+.history-amazon-link {
+  display: inline-block;
+  padding: 8px 15px;
+  font-family: 'VT323', monospace;
+  font-size: 1rem;
+  background: rgba(255, 153, 0, 0.2);
+  border: 1px solid #ff9900;
+  color: #ff9900;
+  text-decoration: none;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  transition: all 0.3s;
+  margin-top: 10px;
+}
+
+.history-amazon-link:hover {
+  background: rgba(255, 153, 0, 0.4);
+  box-shadow: 0 0 10px rgba(255, 153, 0, 0.5);
+}
+
+@media (max-width: 768px) {
+  .winners-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .history-title {
+    font-size: 1.2rem;
+  }
+}
+
