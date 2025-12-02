@@ -137,7 +137,7 @@ function App() {
     const saved = localStorage.getItem(`playVillaVote_${userId}`);
     return saved ? JSON.parse(saved) : null;
   });
-  const [votingEndTime] = useState(() => {
+  const [votingEndTime, setVotingEndTime] = useState(() => {
     const saved = localStorage.getItem('playVillaVotingEndTime');
     if (saved) {
       return new Date(saved);
@@ -149,10 +149,27 @@ function App() {
   const [isVotingEnded, setIsVotingEnded] = useState(false);
   const [winner, setWinner] = useState(null);
 
-  // Check if voting has ended
+  // Check if voting has ended and reset on Sunday
   useEffect(() => {
-    const checkVotingEnd = () => {
+    const checkVotingStatus = () => {
       const now = new Date();
+      const currentDay = now.getDay(); // 0 = Sunday, 6 = Saturday
+      const currentHour = now.getHours();
+      
+      // Reset voting on Sunday at midnight (start of new week)
+      // Check if it's Sunday and we're at midnight (0:00-0:59)
+      if (currentDay === 0 && currentHour === 0 && isVotingEnded) {
+        setIsVotingEnded(false);
+        setWinner(null);
+        setGames([]); // Clear games for fresh start
+        // Set new voting end time to next Saturday
+        const nextSaturday = getNextSaturday();
+        setVotingEndTime(nextSaturday);
+        localStorage.setItem('playVillaVotingEndTime', nextSaturday.toISOString());
+        return;
+      }
+      
+      // Check if voting has ended (Saturday midnight)
       if (now >= votingEndTime && !isVotingEnded) {
         setIsVotingEnded(true);
         // Determine winner
@@ -170,8 +187,8 @@ function App() {
       }
     };
 
-    checkVotingEnd();
-    const interval = setInterval(checkVotingEnd, 1000);
+    checkVotingStatus();
+    const interval = setInterval(checkVotingStatus, 1000);
     return () => clearInterval(interval);
   }, [votingEndTime, isVotingEnded, games]);
 

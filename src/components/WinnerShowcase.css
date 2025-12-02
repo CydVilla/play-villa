@@ -253,6 +253,84 @@
   font-style: italic;
 }
 
+.reset-countdown {
+  margin: 40px 0;
+  padding: 30px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 3px solid #00ffff;
+  box-shadow: 
+    0 0 20px rgba(0, 255, 255, 0.6),
+    inset 0 0 20px rgba(0, 255, 255, 0.1);
+  position: relative;
+  z-index: 1;
+  text-align: center;
+}
+
+.reset-countdown-label {
+  font-family: 'VT323', monospace;
+  font-size: 2rem;
+  color: #00ffff;
+  text-shadow: 0 0 10px #00ffff;
+  margin-bottom: 20px;
+  letter-spacing: 3px;
+}
+
+.reset-countdown-display {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 15px;
+  margin: 20px 0;
+}
+
+.reset-time-unit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 15px 20px;
+  background: rgba(0, 0, 0, 0.8);
+  border: 2px solid #00ffff;
+  min-width: 100px;
+  box-shadow: 
+    0 0 15px rgba(0, 255, 255, 0.5),
+    inset 0 0 10px rgba(0, 255, 255, 0.1);
+}
+
+.reset-time-value {
+  font-family: 'Press Start 2P', cursive;
+  font-size: 2.5rem;
+  color: #00ffff;
+  text-shadow: 
+    0 0 10px #00ffff,
+    0 0 20px #00ffff;
+  line-height: 1;
+  margin-bottom: 10px;
+}
+
+.reset-time-label {
+  font-family: 'VT323', monospace;
+  font-size: 1.2rem;
+  color: rgba(0, 255, 255, 0.8);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.reset-time-separator {
+  font-family: 'Press Start 2P', cursive;
+  font-size: 2rem;
+  color: #00ffff;
+  text-shadow: 0 0 10px #00ffff;
+  animation: blink-separator 1s infinite;
+}
+
+.reset-date {
+  font-family: 'VT323', monospace;
+  font-size: 1.5rem;
+  color: rgba(0, 255, 255, 0.8);
+  margin-top: 20px;
+  letter-spacing: 1px;
+}
+
 .discord-invite {
   margin: 40px 0;
   padding: 30px;

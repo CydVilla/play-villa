@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import './WinnerShowcase.css';
 import CalendarIntegration from './CalendarIntegration';
 
@@ -12,7 +12,49 @@ const generateAmazonLink = (gameName) => {
   return `https://www.amazon.com/s?k=${searchQuery}&tag=${storeId}`;
 };
 
+// Get next Sunday at midnight (when voting resets)
+const getNextSunday = (fromDate) => {
+  const date = new Date(fromDate);
+  const day = date.getDay(); // 0 = Sunday, 6 = Saturday
+  const daysUntilSunday = day === 0 ? 7 : (7 - day); // Next Sunday, or 7 days if today is Sunday
+  const nextSunday = new Date(date);
+  nextSunday.setDate(date.getDate() + daysUntilSunday);
+  nextSunday.setHours(0, 0, 0, 0);
+  return nextSunday;
+};
+
 const WinnerShowcase = ({ winner, votingEndTime }) => {
+  const [timeUntilReset, setTimeUntilReset] = useState({ days: 0, hours: 0, minutes: 0, seconds: 0 });
+
+  const calculateTimeUntilReset = useCallback(() => {
+    const now = new Date();
+    const resetTime = getNextSunday(now);
+    const difference = resetTime - now;
+
+    if (difference <= 0) {
+      return { days: 0, hours: 0, minutes: 0, seconds: 0 };
+    }
+
+    return {
+      days: Math.floor(difference / (1000 * 60 * 60 * 24)),
+      hours: Math.floor((difference % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)),
+      minutes: Math.floor((difference % (1000 * 60 * 60)) / (1000 * 60)),
+      seconds: Math.floor((difference % (1000 * 60)) / 1000)
+    };
+  }, []);
+
+  useEffect(() => {
+    setTimeUntilReset(calculateTimeUntilReset());
+    const timer = setInterval(() => {
+      setTimeUntilReset(calculateTimeUntilReset());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [calculateTimeUntilReset]);
+
+  const formatTime = (value) => {
+    return value.toString().padStart(2, '0');
+  };
+
   if (!winner) {
     return (
       <div className="winner-showcase">
@@ -25,6 +67,7 @@ const WinnerShowcase = ({ winner, votingEndTime }) => {
   const nextSaturday = new Date(votingEndTime);
   nextSaturday.setDate(nextSaturday.getDate() + 7); // Next Saturday
   const amazonLink = generateAmazonLink(winner.name);
+  const resetTime = getNextSunday(new Date());
 
   return (
     <div className="winner-showcase">
@@ -75,11 +118,45 @@ const WinnerShowcase = ({ winner, votingEndTime }) => {
         </div>
       )}
 
+      <div className="reset-countdown">
+        <h3 className="reset-countdown-label">NEXT VOTING STARTS IN</h3>
+        <div className="reset-countdown-display">
+          <div className="reset-time-unit">
+            <div className="reset-time-value">{formatTime(timeUntilReset.days)}</div>
+            <div className="reset-time-label">DAYS</div>
+          </div>
+          <div className="reset-time-separator">:</div>
+          <div className="reset-time-unit">
+            <div className="reset-time-value">{formatTime(timeUntilReset.hours)}</div>
+            <div className="reset-time-label">HOURS</div>
+          </div>
+          <div className="reset-time-separator">:</div>
+          <div className="reset-time-unit">
+            <div className="reset-time-value">{formatTime(timeUntilReset.minutes)}</div>
+            <div className="reset-time-label">MIN</div>
+          </div>
+          <div className="reset-time-separator">:</div>
+          <div className="reset-time-unit">
+            <div className="reset-time-value">{formatTime(timeUntilReset.seconds)}</div>
+            <div className="reset-time-label">SEC</div>
+          </div>
+        </div>
+        <p className="reset-date">
+          Voting resets: {resetTime.toLocaleDateString('en-US', { 
+            weekday: 'long', 
+            month: 'long', 
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          })}
+        </p>
+      </div>
+
       <div className="discord-invite">
         <h3 className="discord-title">JOIN THE COMMUNITY</h3>
         <a 
           href="https://discord.gg/Nh7RYw2zJD" 
-          target="_blank" 
+          target="_blank"
           rel="noopener noreferrer"
           className="discord-button"
         >
