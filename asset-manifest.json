@@ -1,0 +1,13 @@
+{
+  "files": {
+    "main.css": "/play-villa/static/css/main.37580901.css",
+    "main.js": "/play-villa/static/js/main.0f07dd81.js",
+    "index.html": "/play-villa/index.html",
+    "main.37580901.css.map": "/play-villa/static/css/main.37580901.css.map",
+    "main.0f07dd81.js.map": "/play-villa/static/js/main.0f07dd81.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.37580901.css",
+    "static/js/main.0f07dd81.js"
+  ]
+}
