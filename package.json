@@ -5,6 +5,8 @@
   "private": true,
   "homepage": "https://CydVilla.github.io/play-villa",
   "dependencies": {
+    "css-has-pseudo": "^7.0.3",
+    "language-tags": "^2.1.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-scripts": "5.0.1"
