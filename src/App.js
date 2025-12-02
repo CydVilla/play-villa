@@ -27,6 +27,61 @@ const getNextSaturday = () => {
   return nextSaturday;
 };
 
+// Function to send winner announcement to Discord
+const sendDiscordWebhook = async (winner, votingEndTime) => {
+  const webhookUrl = process.env.REACT_APP_DISCORD_WEBHOOK_URL;
+  
+  if (!webhookUrl || !winner) return;
+
+  const nextSaturday = new Date(votingEndTime);
+  nextSaturday.setDate(nextSaturday.getDate() + 7);
+
+  const embed = {
+    title: "🎮 PLAY VILLA - WINNER ANNOUNCED! 🎮",
+    description: `**${winner.name}** has won the vote!`,
+    color: 0x00ff00, // Green color
+    fields: [
+      {
+        name: "📊 Votes",
+        value: `${winner.votes} vote${winner.votes !== 1 ? 's' : ''}`,
+        inline: true
+      },
+      {
+        name: "📅 Play Date",
+        value: nextSaturday.toLocaleDateString('en-US', { 
+          weekday: 'long', 
+          month: 'long', 
+          day: 'numeric' 
+        }),
+        inline: true
+      }
+    ],
+    footer: {
+      text: "Join us on Saturday! • https://discord.gg/Nh7RYw2zJD"
+    },
+    timestamp: new Date().toISOString()
+  };
+
+  // Add image if available
+  if (winner.image) {
+    embed.image = { url: winner.image };
+  }
+
+  try {
+    await fetch(webhookUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        embeds: [embed]
+      })
+    });
+  } catch (error) {
+    console.error('Failed to send Discord webhook:', error);
+  }
+};
+
 function App() {
   const [games, setGames] = useState(() => {
     const saved = localStorage.getItem('playVillaGames');
@@ -58,7 +113,11 @@ function App() {
         // Determine winner
         if (games.length > 0) {
           const sortedGames = [...games].sort((a, b) => b.votes - a.votes);
-          setWinner(sortedGames[0]);
+          const winnerGame = sortedGames[0];
+          setWinner(winnerGame);
+          
+          // Send Discord webhook notification
+          sendDiscordWebhook(winnerGame, votingEndTime);
         }
       }
     };

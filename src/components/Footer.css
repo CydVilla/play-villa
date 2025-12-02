@@ -13,6 +13,14 @@
   gap: 15px;
 }
 
+.footer-links {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
 .footer-text {
   font-family: 'VT323', monospace;
   font-size: 1.3rem;
@@ -41,6 +49,69 @@
   transform: scale(1.05);
 }
 
+.github-link {
+  font-family: 'VT323', monospace;
+  font-size: 1.5rem;
+  color: #00ff00;
+  text-decoration: none;
+  padding: 10px 20px;
+  border: 2px solid #00ff00;
+  background: rgba(0, 255, 0, 0.1);
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  transition: all 0.3s;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
+}
+
+.github-link:hover {
+  background: rgba(0, 255, 0, 0.2);
+  box-shadow: 0 0 20px rgba(0, 255, 0, 0.6);
+  transform: scale(1.05);
+}
+
+.github-icon {
+  width: 24px;
+  height: 24px;
+  fill: #00ff00;
+}
+
+.test-webhook-btn {
+  font-family: 'VT323', monospace;
+  font-size: 1.5rem;
+  color: #ff00ff;
+  background: rgba(255, 0, 255, 0.1);
+  border: 2px solid #ff00ff;
+  padding: 10px 20px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  cursor: pointer;
+  transition: all 0.3s;
+  box-shadow: 0 0 10px rgba(255, 0, 255, 0.3);
+}
+
+.test-webhook-btn:hover {
+  background: rgba(255, 0, 255, 0.2);
+  box-shadow: 0 0 20px rgba(255, 0, 255, 0.6);
+  transform: scale(1.05);
+}
+
+.test-status {
+  font-family: 'VT323', monospace;
+  font-size: 1.3rem;
+  color: #00ff00;
+  text-shadow: 0 0 10px #00ff00;
+  margin-top: 10px;
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
 .copyright-text {
   font-family: 'VT323', monospace;
   font-size: 1.1rem;
@@ -54,9 +125,16 @@
     font-size: 1.1rem;
   }
   
-  .donation-link {
+  .donation-link,
+  .github-link,
+  .test-webhook-btn {
     font-size: 1.3rem;
     padding: 8px 16px;
+  }
+  
+  .footer-links {
+    flex-direction: column;
+    gap: 15px;
   }
 }
 
