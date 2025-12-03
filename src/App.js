@@ -171,19 +171,25 @@ function App() {
       
       // Check if voting has ended (Saturday midnight)
       if (now >= votingEndTime && !isVotingEnded) {
-        setIsVotingEnded(true);
-        // Determine winner
+        // Only end voting and trigger actions if there's a winner
         if (games.length > 0) {
           const sortedGames = [...games].sort((a, b) => b.votes - a.votes);
           const winnerGame = sortedGames[0];
-          setWinner(winnerGame);
           
-          // Save winner to history
-          saveWinnerToHistory(winnerGame, votingEndTime);
-          
-          // Send Discord webhook notification
-          sendDiscordWebhook(winnerGame, votingEndTime);
+          // Only proceed if there's actually a winner (at least one vote)
+          if (winnerGame && winnerGame.votes > 0) {
+            setIsVotingEnded(true);
+            setWinner(winnerGame);
+            
+            // Save winner to history
+            saveWinnerToHistory(winnerGame, votingEndTime);
+            
+            // Send Discord webhook notification
+            sendDiscordWebhook(winnerGame, votingEndTime);
+          }
+          // If no votes, don't set isVotingEnded - just wait for next cycle
         }
+        // If no games, don't set isVotingEnded - just wait for next cycle
       }
     };
 
@@ -267,9 +273,16 @@ function App() {
       return;
     }
 
-    setIsVotingEnded(true);
     const sortedGames = [...games].sort((a, b) => b.votes - a.votes);
     const winnerGame = sortedGames[0];
+    
+    // Only proceed if there's actually a winner (at least one vote)
+    if (!winnerGame || winnerGame.votes === 0) {
+      alert('No winner - no games have received votes!');
+      return;
+    }
+
+    setIsVotingEnded(true);
     setWinner(winnerGame);
     
     // Save winner to history
