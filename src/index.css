@@ -12,6 +12,22 @@ body {
   background: #000;
   color: #00ff00;
   overflow-x: hidden;
+  text-rendering: optimizeLegibility;
+}
+
+/* Fix blurry text on iOS Safari for elements with text-shadow */
+h1, h2, h3, h4, h5, h6, p, span, div, button, a {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Force hardware acceleration for animated text elements */
+[class*="glitch"], [class*="winner"], [class*="countdown"], [class*="vhs"] {
+  transform: translateZ(0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  will-change: transform;
 }
 
 code {
