@@ -1,13 +1,13 @@
 {
   "files": {
-    "main.css": "/play-villa/static/css/main.e4aceb98.css",
+    "main.css": "/play-villa/static/css/main.8cb1f52a.css",
     "main.js": "/play-villa/static/js/main.5eb69e7f.js",
     "index.html": "/play-villa/index.html",
-    "main.e4aceb98.css.map": "/play-villa/static/css/main.e4aceb98.css.map",
+    "main.8cb1f52a.css.map": "/play-villa/static/css/main.8cb1f52a.css.map",
     "main.5eb69e7f.js.map": "/play-villa/static/js/main.5eb69e7f.js.map"
   },
   "entrypoints": [
-    "static/css/main.e4aceb98.css",
+    "static/css/main.8cb1f52a.css",
     "static/js/main.5eb69e7f.js"
   ]
 }
