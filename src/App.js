@@ -153,15 +153,21 @@ function App() {
   useEffect(() => {
     const checkVotingStatus = () => {
       const now = new Date();
-      const currentDay = now.getDay(); // 0 = Sunday, 6 = Saturday
-      const currentHour = now.getHours();
+      // Reset time is Sunday at midnight, based on this round's votingEndTime (Saturday midnight)
+      const resetTime = new Date(votingEndTime);
+      resetTime.setDate(resetTime.getDate() + 1);
+      resetTime.setHours(0, 0, 0, 0);
       
       // Reset voting on Sunday at midnight (start of new week)
-      // Check if it's Sunday and we're at midnight (0:00-0:59)
-      if (currentDay === 0 && currentHour === 0 && isVotingEnded) {
+      // NOTE: Don't require the app to be open exactly at midnight; reset anytime after resetTime.
+      if (now >= resetTime) {
         setIsVotingEnded(false);
         setWinner(null);
         setGames([]); // Clear games for fresh start
+        // Clear this device's vote for the new round
+        const userId = getUserId();
+        setUserVote(null);
+        localStorage.removeItem(`playVillaVote_${userId}`);
         // Set new voting end time to next Saturday
         const nextSaturday = getNextSaturday();
         setVotingEndTime(nextSaturday);
@@ -171,25 +177,29 @@ function App() {
       
       // Check if voting has ended (Saturday midnight)
       if (now >= votingEndTime && !isVotingEnded) {
-        // Only end voting and trigger actions if there's a winner
+        // Always end voting at the deadline so the UI can transition to the "ended" state
+        // and show the reset countdown. If there's no winner, do NOT trigger any side effects.
+        setIsVotingEnded(true);
+
         if (games.length > 0) {
           const sortedGames = [...games].sort((a, b) => b.votes - a.votes);
           const winnerGame = sortedGames[0];
-          
-          // Only proceed if there's actually a winner (at least one vote)
+
+          // Only trigger winner side effects if there's actually a winner (at least one vote)
           if (winnerGame && winnerGame.votes > 0) {
-            setIsVotingEnded(true);
             setWinner(winnerGame);
-            
+
             // Save winner to history
             saveWinnerToHistory(winnerGame, votingEndTime);
-            
+
             // Send Discord webhook notification
             sendDiscordWebhook(winnerGame, votingEndTime);
+          } else {
+            setWinner(null);
           }
-          // If no votes, don't set isVotingEnded - just wait for next cycle
+        } else {
+          setWinner(null);
         }
-        // If no games, don't set isVotingEnded - just wait for next cycle
       }
     };
 
