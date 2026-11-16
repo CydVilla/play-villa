@@ -34,7 +34,8 @@ export function discord(path: string, options: {
     method: options.method ?? 'GET',
     headers,
     body: options.body ? JSON.stringify({ ...options.body, allowed_mentions: mentions }) : undefined,
-    redirect: 'error',
+    // Workers supports manual redirects. A 3xx response stays an HTTP failure.
+    redirect: 'manual',
     signal: AbortSignal.timeout(options.timeout ?? 7000),
   })
 }

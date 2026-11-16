@@ -16,7 +16,7 @@ async function request(env: Env, path: string, query?: string) {
     url.searchParams.set('page_size', '6')
   }
   try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(3500), redirect: 'error' })
+    const response = await fetch(url, { signal: AbortSignal.timeout(3500), redirect: 'manual' })
     if (!response.ok) throw new Error()
     return response
   } catch {

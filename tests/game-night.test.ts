@@ -262,6 +262,7 @@ test('signed interaction HTTP handler acknowledges within Discord protocol and p
   const fetch = t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
     assert.match(url, /messages\/@original$/)
     assert.equal(options.method, 'PATCH')
+    assert.equal(options.redirect, 'manual')
     const body = JSON.parse(String(options.body))
     assert.match(body.content, /New sessions/)
     assert.deepEqual(body.allowed_mentions, { parse: [] })
@@ -337,9 +338,10 @@ test('RAWG lookup is optional, server-side, throttled, and rejects an untrusted 
   const { id } = await h.create()
   assert.match((await h.action('search', { query: 'Port' })).message.content!, /disabled/)
   const env = { ...h.env, RAWG_API_KEY: 'mock-rawg-key' }
-  const search = t.mock.method(globalThis, 'fetch', async (request: URL) => {
+  const search = t.mock.method(globalThis, 'fetch', async (request: URL, options: RequestInit) => {
     assert.equal(request.origin, 'https://api.rawg.io')
     assert.equal(request.searchParams.get('key'), 'mock-rawg-key')
+    assert.equal(options.redirect, 'manual')
     const game = { id: 123, name: 'Portal 2', background_image: 'https://untrusted.example/test.jpg' }
     return Response.json(request.pathname.endsWith('/123') ? game : { results: [game] })
   })
