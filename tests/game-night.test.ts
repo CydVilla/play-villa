@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import worker from '../worker/index.ts'
+import { syncEvents } from '../worker/events.ts'
 import { deliverPending } from '../worker/delivery.ts'
 import { autocomplete, handleInteraction, type Interaction } from '../worker/interactions.ts'
 import { publicSchedule } from '../worker/public.ts'
@@ -380,4 +381,192 @@ test('a cancelled session cannot send its previously scheduled reminder', async 
   assert.equal(h.one("SELECT state FROM deliveries WHERE kind = 'reminder'")?.state, 'skipped')
   assert.equal(h.one("SELECT state FROM deliveries WHERE kind = 'cancelled'")?.state, 'sent')
   assert.equal(send.mock.callCount(), 1)
+})
+
+test('upgrading a populated D1 preserves RSVPs and Discord delivery IDs', () => {
+  const db = database(false)
+  db.apply('0001_game_nights.sql')
+  db.sqlite.exec(`
+    INSERT INTO guilds (id, channel_id) VALUES ('${server}', '${channel}');
+    INSERT INTO sessions (id, guild_id, channel_id, title, timezone, created_at, deadline, duration, reminder, minimum)
+    VALUES ('old', '${server}', '${channel}', 'Old night', 'UTC', ${at}, ${at + 60}, 120, 60, 2);
+    INSERT INTO rsvps VALUES ('old', '${member}', 'going');
+    UPDATE deliveries SET state = 'sent', message_id = '998000000000000001';
+  `)
+  db.apply('0002_game_night_upgrades.sql')
+  assert.equal(db.sqlite.prepare("SELECT needs_reconfirm FROM rsvps WHERE session_id = 'old'").get()?.needs_reconfirm, 0)
+  assert.equal(db.sqlite.prepare("SELECT message_id FROM deliveries WHERE session_id = 'old'").get()?.message_id, '998000000000000001')
+  assert.deepEqual(db.sqlite.prepare('PRAGMA foreign_key_check').all(), [])
+})
+
+test('rescheduling keeps the game and session, invalidates old RSVP buttons, and replaces the reminder', async t => {
+  const h = harness()
+  await h.configure()
+  const { id } = await h.create({ capacity: 2 })
+  await h.action('confirm', { session: id, game: '1', time: String(time1) })
+  await h.click('going', id, member)
+  await h.click('maybe', id, otherMember)
+  const moved = await h.action('reschedule', { session: id, time: '2026-11-22 21:00Z' })
+  assert.match(moved.message.content!, /moved/)
+  const item = (await h.get(id))!
+  assert.equal(item.revision, 1)
+  assert.equal(item.game_id, 1)
+  assert.equal(item.starts_at, parseTime('2026-11-22 21:00Z', 'UTC'))
+  assert.equal(h.one('SELECT count(*) AS n FROM rsvps WHERE needs_reconfirm = 1')?.n, 2)
+  assert.match((await h.click('going', id, member)).message.content!, /game night moved/)
+  assert.match((await h.click('going', id + ':1', member)).message.content!, /saved/)
+  assert.equal(h.one('SELECT count(*) AS n FROM rsvps WHERE needs_reconfirm = 1')?.n, 1)
+  await h.action('reschedule', { session: id, time: '2026-11-22 21:00Z' })
+  assert.equal(h.one("SELECT count(*) AS n FROM deliveries WHERE kind = 'rescheduled'")?.n, 1)
+
+  const originalReminder = time1 - 3600
+  t.mock.timers.enable({ apis: ['Date'], now: new Date(originalReminder * 1000) })
+  const sent = t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
+    const body = JSON.parse(String(options.body))
+    assert.match(body.embeds[0].title, /Rescheduled/)
+    return Response.json({ id: '998000000000000001' })
+  })
+  const env = { ...h.env, DISCORD_BOT_TOKEN: 'test-token' }
+  await deliverPending(env, originalReminder)
+  await deliverPending(env, originalReminder)
+  assert.equal(sent.mock.callCount(), 1)
+  assert.equal(h.one("SELECT state FROM deliveries WHERE kind = 'reminder' AND revision = 0")?.state, 'skipped')
+  assert.equal(h.one("SELECT due_at FROM deliveries WHERE kind = 'reminder' AND revision = 1")?.due_at, item.starts_at! - 3600)
+
+  const site = await publicSchedule({ ...h.env, PUBLIC_GUILD_ID: server, PUBLIC_CHANNEL_ID: channel },
+    new Request('https://worker.example/api/schedule'), at)
+  const body = await site.json()
+  assert.equal(body.sessions[0].revision, 1)
+  assert.equal(body.sessions[0].response_counts.reconfirm, 1)
+  const exported = calendar({ id, start: item.starts_at, revision: 1, duration: 120,
+    decidedAt: item.decided_at, summary: 'Game night', description: '', location: 'Discord' })
+  assert.match(exported.data, new RegExp(`UID:${id}@play-villa`))
+  assert.match(exported.data, /SEQUENCE:1/)
+})
+
+test('a full confirmed night offers freed seats in order and expires unclaimed holds', async t => {
+  const h = harness()
+  const nextMember = '100000000000000009'
+  const newcomer = '100000000000000010'
+  await h.configure()
+  const { id } = await h.create({ capacity: 1 })
+  await h.action('confirm', { session: id, game: '1', time: String(time1) })
+  await h.click('going', id, member)
+  assert.match((await h.click('going', id, otherMember)).message.content!, /#1 on the waitlist/)
+  assert.match((await h.click('going', id, nextMember)).message.content!, /#2 on the waitlist/)
+  await h.click('declined', id, member)
+  assert.equal(h.one('SELECT offered_until FROM waitlist WHERE user_id = ?', otherMember)?.offered_until, at + 1800)
+  assert.equal(h.one('SELECT offered_until FROM waitlist WHERE user_id = ?', nextMember)?.offered_until, null)
+  assert.match((await h.click('going', id, newcomer)).message.content!, /waitlist/)
+  assert.equal(h.one("SELECT count(*) AS n FROM rsvps WHERE response = 'going'")?.n, 0)
+  await scheduleRounds(h.env.DB, at + 1800)
+  assert.equal(h.one('SELECT offered_until FROM waitlist WHERE user_id = ?', nextMember)?.offered_until, at + 3600)
+  assert.equal(h.one('SELECT id FROM waitlist WHERE user_id = ?', otherMember), undefined)
+
+  t.mock.timers.enable({ apis: ['Date'], now: new Date((at + 1800) * 1000) })
+  const offers: { content: string; allowed_mentions: { users?: string[] } }[] = []
+  t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
+    const body = JSON.parse(String(options.body))
+    if (body.embeds[0].title === 'A game night spot opened') offers.push(body)
+    return Response.json({ id: '998000000000000001' })
+  })
+  const env = { ...h.env, DISCORD_BOT_TOKEN: 'test-token' }
+  await deliverPending(env, at + 1800)
+  await deliverPending(env, at + 1800)
+  assert.deepEqual(offers.map(offer => offer.allowed_mentions), [{ parse: [], users: [nextMember] }])
+  assert.equal(offers[0].content, `<@${nextMember}>`)
+  assert.match((await h.click('going', id, nextMember, undefined, { now: at + 1801 })).message.content!, /saved/)
+  assert.equal(h.one("SELECT count(*) AS n FROM rsvps WHERE response = 'going'")?.n, 1)
+  assert.equal(h.one("SELECT count(*) AS n FROM deliveries WHERE kind = 'offer'")?.n, 2)
+})
+
+test('party filters require all tagged platforms and the group size, and surprise keeps votes unchanged', async () => {
+  const h = harness()
+  await h.configure()
+  const { id } = await h.create()
+  await h.action('tag', { session: id, game: '1', platforms: 'PC,Xbox', crossplay: true, min_players: 2, max_players: 4 })
+  await h.action('nominate', { session: id, game: 'Another game', platforms: 'PC', crossplay: false, max_players: 5 })
+  await h.click('vote', id, member, ['2'])
+  const match = await h.action('shortlist', { session: id, platforms: 'pc, xbox', crossplay: true, players: 3, surprise: true })
+  assert.match(match.message.content!, /Surprise pick.*Overcooked/)
+  assert.doesNotMatch(match.message.content!, /Another game/)
+  assert.match((await h.action('shortlist', { session: id, platforms: 'xbox', players: 5 })).message.content!, /No nominated games match/)
+  assert.match((await h.action('tag', { session: id, game: '1', max_players: 1 })).message.content!, /player range/)
+  assert.match((await h.click('surprise', id, member)).message.content!, /Surprise pick/)
+  assert.equal(h.one('SELECT game_id FROM votes WHERE user_id = ?', member)?.game_id, 2)
+})
+
+test('a rematch copies the confirmed game and its setup while starting fresh ballots', async () => {
+  const h = harness()
+  await h.action('configure', { channel, voice: otherChannel, timezone: 'UTC', duration: 90 })
+  const { id } = await h.create({ capacity: 4 })
+  await h.action('tag', { session: id, game: '1', platforms: 'PC, Xbox', crossplay: true, max_players: 4 })
+  await h.click('vote', id, member, ['1'])
+  await h.click('going', id, member)
+  await h.action('confirm', { session: id, game: '1', time: String(time1) })
+  const rematch = { session: id, time: '2026-11-28 20:00Z' }
+  assert.match((await h.action('rematch', rematch)).message.content!, /completed/)
+  await h.action('configure', { clear_voice: true, duration: 120 })
+  const again = await h.action('rematch', rematch, { now: time1 + 7200 })
+  const item = (await h.get(again.id))!
+  assert.equal(item.status, 'open')
+  assert.equal(item.capacity, 4)
+  assert.equal(item.duration, 90)
+  assert.equal(item.voice_id, otherChannel)
+  assert.equal(h.one('SELECT max_players FROM games WHERE session_id = ?', again.id)?.max_players, 4)
+  assert.equal(h.one('SELECT count(*) AS n FROM votes WHERE session_id = ?', again.id)?.n, 0)
+  assert.equal(h.one('SELECT count(*) AS n FROM rsvps WHERE session_id = ?', again.id)?.n, 0)
+})
+
+test('Discord Events are opt-in and an ambiguous create reconciles before updates and cancellation', async t => {
+  const h = harness()
+  await h.configure()
+  const withoutEvents = await h.create()
+  await h.action('confirm', { session: withoutEvents.id, game: '1', time: String(time1) })
+  assert.equal(h.one('SELECT count(*) AS n FROM discord_events')?.n, 0)
+
+  await h.action('configure', { discord_events: true })
+  const created = await h.create({ game: 'Event test' })
+  const gameId = String(h.one('SELECT id FROM games WHERE session_id = ?', created.id)?.id)
+  await h.action('confirm', { session: created.id, game: gameId, time: String(time1) })
+  const env = { ...h.env, DISCORD_BOT_TOKEN: 'mock-token' }
+  const eventId = '998000000000000012'
+  let published: { id: string; creator_id: string; description: string } | null = null
+  let creates = 0
+  const patches: Record<string, unknown>[] = []
+  t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
+    assert.match(url, new RegExp(`/guilds/${server}/scheduled-events`))
+    if (options.method === 'POST') {
+      creates++
+      const body = JSON.parse(String(options.body))
+      assert.equal(body.privacy_level, 2)
+      assert.equal(body.entity_type, 3)
+      assert.equal(body.scheduled_start_time, new Date(time1 * 1000).toISOString())
+      assert.equal(body.allowed_mentions, undefined)
+      published = { id: eventId, creator_id: app, description: body.description }
+      throw new Error('mock transport interruption after creating the event')
+    }
+    if (options.method === 'PATCH') {
+      assert.ok(url.endsWith(eventId))
+      patches.push(JSON.parse(String(options.body)))
+      return Response.json({ ...published })
+    }
+    if (url.endsWith(eventId)) return Response.json({ ...published, status: 1 })
+    return Response.json([{ ...published, creator_id: otherServer }, published])
+  })
+  await Promise.all([syncEvents(env, at, created.id), syncEvents(env, at, created.id)])
+  assert.equal(creates, 1)
+  assert.equal(h.one('SELECT event_id FROM discord_events')?.event_id, null)
+  await syncEvents(env, at + 60, created.id)
+  assert.equal(h.one('SELECT event_id FROM discord_events')?.event_id, eventId)
+  await syncEvents(env, at + 61, created.id)
+  await h.action('reschedule', { session: created.id, time: '2026-11-22 21:00Z' }, { now: at + 62 })
+  await syncEvents(env, at + 62, created.id)
+  assert.equal(patches.at(-1)?.scheduled_start_time, '2026-11-22T21:00:00.000Z')
+  await h.action('configure', { discord_events: false }, { now: at + 63 })
+  await h.action('cancel', { session: created.id }, { now: at + 63 })
+  await syncEvents(env, at + 63, created.id)
+  assert.deepEqual(patches.at(-1), { status: 4 })
+  assert.equal(h.one('SELECT event_id FROM discord_events')?.event_id, null)
+  assert.equal(creates, 1)
 })

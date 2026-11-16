@@ -1,4 +1,4 @@
-import type { Env } from './types.ts'
+import { snowflake, type Env } from './types.ts'
 
 export type Message = {
   content?: string
@@ -26,14 +26,16 @@ export function discord(path: string, options: {
   method?: 'GET' | 'POST' | 'PATCH'
   body?: object
   timeout?: number
+  pingUser?: string
 } = {}) {
   const headers = new Headers()
   if (options.token) headers.set('Authorization', `Bot ${options.token}`)
   if (options.body) headers.set('Content-Type', 'application/json')
+  const allowed = snowflake(options.pingUser) ? { ...mentions, users: [options.pingUser] } : mentions
   return fetch(apiBase + path, {
     method: options.method ?? 'GET',
     headers,
-    body: options.body ? JSON.stringify({ ...options.body, allowed_mentions: mentions }) : undefined,
+    body: options.body ? JSON.stringify(path.includes('/messages') ? { ...options.body, allowed_mentions: allowed } : options.body) : undefined,
     // Workers supports manual redirects. A 3xx response stays an HTTP failure.
     redirect: 'manual',
     signal: AbortSignal.timeout(options.timeout ?? 7000),

@@ -1,12 +1,14 @@
+import { attendance, offerSpots, reschedule } from './attendance.ts'
+import { parsePlatforms, shortlist } from './party.ts'
 import { escapeText, timestamp, type Message } from './discord-api.ts'
 import { board, timeMenu, voteMenu } from './presentation.ts'
 import { allowRawg, rawgGame, searchRawg } from './rawg.ts'
 import {
-  acceptsBallots, addSlot, attendance, availability, checkedLabel, close, confirm, details, guild, manualSession,
+  acceptsBallots, addSlot, availability, checkedLabel, close, confirm, details, guild, manualSession,
   mutate, nomination, rows, session, statement, vote,
 } from './store.ts'
 import { canonicalZone, parseFuture, parseWeekly, weeklyWindow } from './time.ts'
-import { InputError, snowflake, type Env, type Guild, type RSVP, type Session, type Weekly } from './types.ts'
+import { InputError, snowflake, type Env, type Game, type GameTags, type Guild, type RSVP, type Session, type Weekly } from './types.ts'
 
 interface Option {
   name: string
@@ -127,23 +129,26 @@ async function configure(ctx: Context, opts: Options) {
   const minimum = opts.number('minimum', 1, 25) ?? previous?.minimum ?? 2
   const reminder = opts.number('reminder', 0, 10080) ?? previous?.reminder ?? 60
   const duration = opts.number('duration', 15, 480) ?? previous?.duration ?? 120
+  const eventOption = opts.values.get('discord_events')
+  const discordEvents = typeof eventOption === 'boolean' ? Number(eventOption) : previous?.discord_events ?? 0
   const next = previous?.weekly ? nextOpening({ timezone }, JSON.parse(previous.weekly), ctx.now) : null
   const changed = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [
     statement(ctx.db, `
-      INSERT INTO guilds (id, channel_id, timezone, voice_id, organizer_role, minimum, reminder, duration)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${gate}
+      INSERT INTO guilds (id, channel_id, timezone, voice_id, organizer_role, minimum, reminder, duration, discord_events)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${gate}
       ON CONFLICT(id) DO UPDATE SET
         channel_id = excluded.channel_id, timezone = excluded.timezone, voice_id = excluded.voice_id,
         organizer_role = excluded.organizer_role, minimum = excluded.minimum, reminder = excluded.reminder,
-        duration = excluded.duration,
+        duration = excluded.duration, discord_events = CASE WHEN ? THEN excluded.discord_events ELSE guilds.discord_events END,
         next_open_at = CASE WHEN guilds.timezone <> excluded.timezone THEN ? ELSE guilds.next_open_at END,
         weekly_version = CASE WHEN guilds.timezone <> excluded.timezone AND guilds.weekly IS NOT NULL
           THEN ? ELSE guilds.weekly_version END
       WHERE guilds.weekly_version IS ? AND guilds.timezone IS ?
-    `, ctx.guildId, channel, timezone, voice, role, minimum, reminder, duration, next,
+    `, ctx.guildId, channel, timezone, voice, role, minimum, reminder, duration, discordEvents, Number(typeof eventOption === 'boolean'), next,
     ctx.interaction.id, previous?.weekly_version ?? null, previous?.timezone ?? null),
   ])
-  return reply(changed?.[0] ? `New sessions will use <#${channel}> and ${timezone}.` : 'Settings may have changed. Run the command again to verify.')
+  const eventSetup = eventOption === true ? ' Newly confirmed nights will also appear in Discord Events when the bot has Create Events permission.' : ''
+  return reply(changed?.[0] ? `New sessions will use <#${channel}> and ${timezone}.${eventSetup}` : 'Settings may have changed. Run the command again to verify.')
 }
 
 async function weekly(ctx: Context, settings: Guild, opts: Options) {
@@ -181,22 +186,23 @@ async function weekly(ctx: Context, settings: Guild, opts: Options) {
     : 'Weekly rounds are disabled. Any existing rounds keep their current deadlines.')
 }
 
-async function create(ctx: Context, settings: Guild, opts: Options) {
+async function create(ctx: Context, settings: Guild, opts: Options, prior?: { session: Session; game: Game }) {
   requiredChannel(ctx, settings)
   if (!ctx.admin && !fromRole(ctx, settings)) throw new InputError('Creating game nights requires Manage Server or the organizer role.')
-  const game = checkedLabel(opts.text('game'), 100)
-  const description = opts.text('description') ? checkedLabel(opts.text('description'), 400) : ''
+  const game = prior?.game.name ?? checkedLabel(opts.text('game'), 100)
+  const description = prior?.session.description ?? (opts.text('description') ? checkedLabel(opts.text('description'), 400) : '')
+  const zone = prior?.session.timezone ?? settings.timezone
   const proposed = [opts.text('time'), ...opts.text('alternatives').split(',').filter(value => value.trim())]
-  const slots = [...new Set(proposed.map(time => parseFuture(time, settings.timezone, ctx.now)))].sort((a, b) => a - b)
+  const slots = [...new Set(proposed.map(time => parseFuture(time, zone, ctx.now)))].sort((a, b) => a - b)
   if (slots.length > 10) throw new InputError('Choose at most ten time slots.')
-  const deadline = opts.text('deadline') ? parseFuture(opts.text('deadline'), settings.timezone, ctx.now)
+  const deadline = opts.text('deadline') ? parseFuture(opts.text('deadline'), zone, ctx.now)
     : Math.min(slots[0] - 60, ctx.now + 3 * 86400)
   if (deadline <= ctx.now || deadline >= slots[0]) throw new InputError('Set a future voting deadline before the first slot.')
   const id = ctx.interaction.id
-  const capacity = opts.number('capacity', 1, 99)
+  const capacity = prior?.session.capacity ?? opts.number('capacity', 1, 99)
   const result = await mutate(ctx.db, id, ctx.now, gate =>
-    manualSession(ctx.db, settings, id, ctx.user, game, description, slots, deadline, capacity, ctx.now, gate))
-  return reply(result ? `Game night created. Voting closes ${timestamp(deadline)}. The channel announcement is queued.`
+    manualSession(ctx.db, settings, id, ctx.user, game, description, slots, deadline, capacity, ctx.now, gate, prior))
+  return reply(result ? `${prior ? 'Rematch poll' : 'Game night'} created. Voting closes ${timestamp(deadline)}. The channel announcement is queued.`
     : 'This request was already handled.', id)
 }
 
@@ -220,18 +226,64 @@ async function edit(ctx: Context, item: Session, opts: Options) {
       WHERE id = ? AND status <> 'cancelled' AND ${gate}
       AND (? IS NULL OR (${acceptsBallots} AND ? < (SELECT min(starts_at) FROM slots WHERE session_id = sessions.id)))
       AND (? IS NULL OR ? = 0 OR ? >= (
-        SELECT count(*) FROM rsvps WHERE session_id = sessions.id AND response = 'going'
-      ))
+        SELECT count(*) FROM rsvps WHERE session_id = sessions.id AND response = 'going' AND needs_reconfirm = 0
+      ) + (SELECT count(*) FROM waitlist WHERE session_id = sessions.id AND offered_until > ?))
+
     `, title, description, deadline, capacity, capacity, Number(clearVoice), voice, item.id,
-    deadline, ctx.now, deadline, capacity, capacity, capacity),
+    deadline, ctx.now, deadline, capacity, capacity, capacity, ctx.now),
+    ...offerSpots(ctx.db, item.id, ctx.now, gate),
   ])
   return reply(result?.[0] ? 'Game night updated. View details shows the latest settings.'
-    : 'The update did not apply. Check the voting deadline, cancellation status, and current Going count.')
+    : 'The update did not apply. Check the voting deadline, cancellation status, and seats already taken or offered.', item.id)
 }
 
 function positive(value: string) {
   if (!/^\d{1,15}$/.test(value) || Number(value) < 1) throw new InputError('Choose a valid entry from the list.')
   return Number(value)
+}
+
+function tagOptions(opts: Options): GameTags {
+  const crossplay = opts.values.get('crossplay')
+  const minimum = opts.number('min_players', 1, 99)
+  const maximum = opts.number('max_players', 1, 99)
+  if (minimum !== null && maximum !== null && minimum > maximum) {
+    throw new InputError('Minimum players must be at most maximum players.')
+  }
+  return {
+    platforms: JSON.stringify(parsePlatforms(opts.text('platforms'))),
+    crossplay: typeof crossplay === 'boolean' ? Number(crossplay) : null,
+    min_players: minimum,
+    max_players: maximum,
+  }
+}
+
+async function updateTags(ctx: Context, item: Session, opts: Options) {
+  votingOpen(item, ctx.now)
+  const id = positive(opts.text('game'))
+  const tags = tagOptions(opts)
+  const platforms = opts.text('platforms') ? tags.platforms : null
+  if (platforms === null && tags.crossplay === null && tags.min_players === null && tags.max_players === null) {
+    throw new InputError('Provide at least one game tag.')
+  }
+  const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [
+    statement(ctx.db, `
+      UPDATE games SET platforms = coalesce(?, platforms), crossplay = coalesce(?, crossplay),
+        min_players = coalesce(?, min_players), max_players = coalesce(?, max_players)
+      WHERE id = ? AND session_id = ? AND ${gate}
+      AND EXISTS (SELECT 1 FROM sessions WHERE id = games.session_id AND ${acceptsBallots})
+      AND coalesce(?, min_players, 1) <= coalesce(?, max_players, 99)
+    `, platforms, tags.crossplay, tags.min_players, tags.max_players, id, item.id, ctx.now, tags.min_players, tags.max_players),
+  ])
+  return reply(result?.[0] ? 'Game tags updated.' : 'The game or voting window changed, or the player range is invalid.')
+}
+
+async function rematch(ctx: Context, settings: Guild, item: Session, opts: Options) {
+  if (item.status !== 'confirmed' || !item.starts_at || item.starts_at + item.duration * 60 > ctx.now) {
+    throw new InputError('Choose a completed game night to play again.')
+  }
+  const game = await statement(ctx.db, 'SELECT * FROM games WHERE id = ? AND session_id = ?', item.game_id, item.id).first<Game>()
+  if (!game) throw new InputError('The selected night has no confirmed game.')
+  return create(ctx, settings, opts, { session: item, game })
 }
 
 async function slash(ctx: Context): Promise<ActionResult> {
@@ -250,6 +302,12 @@ async function slash(ctx: Context): Promise<ActionResult> {
       : 'No RAWG results found. Use /gamenight nominate with a custom game name.')
   }
   const item = await scopedSession(ctx, opts.text('session'))
+  if (opts.action === 'rematch') return rematch(ctx, settings, item, opts)
+  if (opts.action === 'shortlist') {
+    const data = await details(ctx.db, item)
+    return reply(shortlist(data.games, parsePlatforms(opts.text('platforms')), opts.values.get('crossplay') === true,
+      opts.number('players', 1, 99), opts.values.get('surprise') === true))
+  }
   if (opts.action === 'show') return { message: board(await details(ctx.db, item), ctx.now) }
   if (opts.action === 'nominate') {
     votingOpen(item, ctx.now)
@@ -260,7 +318,7 @@ async function slash(ctx: Context): Promise<ActionResult> {
     const game = rawgId ? await rawgGame(ctx.env, rawgId) : null
     const gameName = game?.name ?? checkedLabel(name, 100)
     const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [
-      nomination(ctx.db, item.id, gameName, ctx.now, gate, game?.id, game?.image),
+      nomination(ctx.db, item.id, gameName, ctx.now, gate, { ...tagOptions(opts), rawg_id: game?.id, image: game?.image }),
     ])
     return reply(result?.[0] ? `Added **${escapeText(gameName)}** to the ballot.` : 'The game is already listed, the ballot is full, or voting has closed.')
   }
@@ -273,6 +331,14 @@ async function slash(ctx: Context): Promise<ActionResult> {
   }
   if (!mayManage(ctx, settings, item)) throw new InputError('Only an organizer or server manager can manage this game night.')
   switch (opts.action) {
+    case 'tag': return updateTags(ctx, item, opts)
+    case 'reschedule': {
+      const time = parseFuture(opts.text('time'), item.timezone, ctx.now)
+      const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate =>
+        reschedule(ctx.db, item.id, item.revision, time, ctx.now, gate))
+      return reply(result?.[1] ? `Game night moved to ${timestamp(time, 'F')}. Ask attendees to RSVP on the updated board.`
+        : 'Choose a different future time for a confirmed game night that has yet to start.', item.id)
+    }
     case 'edit': return edit(ctx, item, opts)
     case 'close': {
       const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [close(ctx.db, item.id, ctx.now, gate, false)])
@@ -298,29 +364,48 @@ async function slash(ctx: Context): Promise<ActionResult> {
     }
     case 'delivery-status': {
       const deliveries = await rows<{ kind: string; state: string; error: string | null }>(ctx.db,
-        'SELECT kind, state, error FROM deliveries WHERE session_id = ? ORDER BY id', item.id)
-      return reply(deliveries.map(job => `**${job.kind}** · ${job.state}${job.error ? ` · ${job.error}` : ''}`).join('\n'))
+        'SELECT kind, state, error FROM deliveries WHERE session_id = ? ORDER BY id DESC LIMIT 20', item.id)
+      const event = await statement(ctx.db, 'SELECT event_id, generation, synced, error FROM discord_events WHERE session_id = ?', item.id)
+        .first<{ event_id: string | null; generation: number; synced: number; error: string | null }>()
+      const status = deliveries.map(job => `**${job.kind}** · ${job.state}${job.error ? ` · ${job.error}` : ''}`)
+      if (event) status.push(`**Discord Event** · ${event.error ?? (event.synced === event.generation ? 'synced' : 'pending')}`)
+      return reply(status.join('\n').slice(0, 1900))
     }
     default: throw new InputError('Unrecognized game night command.')
   }
 }
 
 async function component(ctx: Context): Promise<ActionResult> {
-  const match = /^gn:([a-z-]+):([a-f0-9-]{17,36})$/.exec(ctx.interaction.data?.custom_id ?? '')
+  const match = /^gn:([a-z-]+):([a-f0-9-]{17,36})(?::(\d{1,9}))?$/.exec(ctx.interaction.data?.custom_id ?? '')
   if (!match) throw new InputError('Unknown game night control.')
-  const [, action, id] = match
+  const [, action, id, version] = match
+  const revision = Number(version ?? 0)
   const item = await scopedSession(ctx, id)
   const values = ctx.interaction.data?.values ?? []
   if (action === 'show') return { message: board(await details(ctx.db, item), ctx.now) }
+  if (revision !== item.revision) throw new InputError('This game night moved. Open View details or use the updated board to RSVP.')
   if (action === 'going' || action === 'maybe' || action === 'declined') {
-    const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [
-      attendance(ctx.db, id, ctx.user, action as RSVP, ctx.now, gate),
-    ])
+    const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate =>
+      attendance(ctx.db, id, revision, ctx.user, action as RSVP, ctx.now, gate))
     const states = { going: 'Going', maybe: 'Maybe', declined: 'Can’t attend' }
-    return reply(result?.[0] ? `RSVP saved as **${states[action]}**.`
-      : 'The game night is full or no longer accepting RSVPs. Use View details to see its status.')
+    if (result?.[2]) return reply(`RSVP saved as **${states[action]}**.`, id)
+    if (result && action === 'going') {
+      const waiting = await statement(ctx.db, `
+        SELECT w.offered_until, (SELECT count(*) FROM waitlist q WHERE q.session_id = w.session_id
+          AND q.offered_until IS NULL AND q.id <= w.id) AS position
+        FROM waitlist w JOIN sessions s ON s.id = w.session_id WHERE w.session_id = ? AND w.user_id = ? AND s.revision = ?
+      `, id, ctx.user, revision).first<{ offered_until: number | null; position: number }>()
+      if (waiting) return reply(waiting.offered_until
+        ? `Your spot is held until ${timestamp(waiting.offered_until, 'R')}. Select Going again to accept it.`
+        : `The night is full. You are #${waiting.position} on the waitlist. Play Villa will tag you here if a spot opens. Use Maybe or Can’t attend to leave it.`, id)
+    }
+    return reply('The game night is full or no longer accepting RSVPs. Use View details to see its status.')
   }
   votingOpen(item, ctx.now)
+  if (action === 'surprise') {
+    const data = await details(ctx.db, item)
+    return reply(shortlist(data.games, [], false, null, true))
+  }
   if (action === 'vote-menu') {
     const existing = await statement(ctx.db, 'SELECT game_id FROM votes WHERE session_id = ? AND user_id = ?', id, ctx.user)
       .first<number>('game_id')
@@ -365,13 +450,15 @@ export async function autocomplete(env: Env, interaction: Interaction, now: numb
   const query = focus.value.trim().toLowerCase()
   const filter = (name: string, value: string) => name.toLowerCase().includes(query) || value.startsWith(query)
   if (focus.name === 'session') {
+    const rematches = command?.name === 'rematch'
     return rows<{ name: string; value: string }>(ctx.db, `
       SELECT substr(title, 1, 74) || ' · ' || status AS name, id AS value
       FROM sessions WHERE guild_id = ? AND channel_id = ?
       AND (instr(lower(title), ?) OR instr(id, ?) OR ? = '')
+      ${rematches ? "AND status = 'confirmed' AND starts_at + duration * 60 <= ?" : ''}
       ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'closed' THEN 1 WHEN 'confirmed' THEN 2 ELSE 3 END,
         created_at DESC LIMIT 25
-    `, ctx.guildId, ctx.channelId, query, query, query)
+    `, ctx.guildId, ctx.channelId, query, query, query, ...(rematches ? [now] : []))
   }
   const item = await scopedSession(ctx, options(interaction).text('session'))
   if (focus.name === 'game') {

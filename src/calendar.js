@@ -19,12 +19,12 @@ function fold(line) {
   return [...result, part].join('\r\n')
 }
 
-export function calendar({ id, start, duration, decidedAt, summary, location, description }) {
+export function calendar({ id, start, duration, decidedAt, summary, location, description, revision = 0 }) {
   const end = start + duration * 60
   const data = [
     'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Play Villa//Game Nights//EN', 'CALSCALE:GREGORIAN',
     'BEGIN:VEVENT', `UID:${id}@play-villa`, `DTSTAMP:${format(decidedAt)}`,
-    `DTSTART:${format(start)}`, `DTEND:${format(end)}`, `SUMMARY:${escape(summary)}`,
+    `SEQUENCE:${revision}`, `DTSTART:${format(start)}`, `DTEND:${format(end)}`, `SUMMARY:${escape(summary)}`,
     `DESCRIPTION:${escape(description)}`, `LOCATION:${escape(location)}`, 'END:VEVENT', 'END:VCALENDAR', '',
   ].map(fold).join('\r\n')
   const google = new URL('https://calendar.google.com/calendar/render')

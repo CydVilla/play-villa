@@ -1,23 +1,24 @@
 import { channelLink, escapeText, timestamp, type Message } from './discord-api.ts'
+import { partyLabel } from './party.ts'
 import { recommend, type Details } from './store.ts'
 import type { Delivery, Session } from './types.ts'
 
 const button = (custom_id: string, label: string, style = 2) => ({ type: 2, style, custom_id, label })
 const row = (...components: Record<string, unknown>[]) => ({ type: 1, components })
-const key = (action: string, id: string) => `gn:${action}:${id}`
+const key = (action: string, item: Session) => `gn:${action}:${item.id}${item.revision ? `:${item.revision}` : ''}`
 const label = (slice: string, max = 100) => slice.length > max ? `${slice.slice(0, max - 1)}…` : slice
 
 function controls(item: Session, at: number) {
-  const { id, status, deadline } = item
-  const details = button(key('show', id), 'View details')
+  const { status, deadline } = item
+  const details = button(key('show', item), 'View details')
   if (status === 'cancelled') return [row(details)]
   const buttons = [
-    button(key('going', id), 'Going', 3),
-    button(key('maybe', id), 'Maybe'),
-    button(key('declined', id), 'Can’t attend', 4),
+    button(key('going', item), 'Going', 3),
+    button(key('maybe', item), 'Maybe'),
+    button(key('declined', item), 'Can’t attend', 4),
   ]
   return status === 'open' && deadline > at
-    ? [row(button(key('vote-menu', id), 'Vote', 1), button(key('time-menu', id), 'Available times', 1), details), row(...buttons)]
+    ? [row(button(key('vote-menu', item), 'Vote', 1), button(key('time-menu', item), 'Available times', 1), button(key('surprise', item), '🎲 Surprise me'), details), row(...buttons)]
     : [row(details, ...buttons)]
 }
 
@@ -26,7 +27,7 @@ export function voteMenu(data: Details, current: number | null): Message {
   return {
     content: 'Choose a game or retract your vote.',
     components: [row({
-      type: 3, custom_id: key('vote', data.item.id),
+      type: 3, custom_id: key('vote', data.item),
       options: [
         ...data.games.map(game => ({ label: label(game.name), value: String(game.id), default: current === game.id })),
         { label: 'Retract my vote', value: 'none' },
@@ -49,14 +50,14 @@ export function timeMenu(data: Details, current: number[]): Message {
   return {
     content: `Select all times you can make. The times below use the session’s time zone.\n${data.slots.map(slot => timestamp(slot.starts_at)).join(' • ')}`,
     components: [
-      row({ type: 3, custom_id: key('times', data.item.id), min_values: 1, max_values: options.length, options }),
-      row(button(key('clear-times', data.item.id), 'Clear availability')),
+      row({ type: 3, custom_id: key('times', data.item), min_values: 1, max_values: options.length, options }),
+      row(button(key('clear-times', data.item), 'Clear availability')),
     ],
   }
 }
 
 export function board(data: Details, at: number, delivery?: Delivery): Message {
-  const { item, games, slots, going, rsvps } = data
+  const { item, games, slots, going, rsvps, waiting, eventId } = data
   const selected = games.find(game => game.id === item.game_id)
   const status = item.status === 'open' && at >= item.deadline ? 'closed' : item.status
   const proposal = recommend(data, at)
@@ -67,6 +68,7 @@ export function board(data: Details, at: number, delivery?: Delivery): Message {
     status === 'open' && `**Voting closes** ${timestamp(item.deadline, 'R')}`,
     status === 'closed' && 'Voting is closed. An organizer can confirm the session.',
     status === 'cancelled' && 'This game night was cancelled.',
+    delivery?.kind === 'rescheduled' && 'The start time changed. Please RSVP again on this board.',
     status === 'confirmed' && item.starts_at && selected &&
       `**${escapeText(selected.name)}** • ${timestamp(item.starts_at, 'F')}`,
     ['open', 'closed'].includes(status) && `**Recommended game** ${suggestedGame ? escapeText(suggestedGame.name) : 'Awaiting votes'}`,
@@ -74,20 +76,27 @@ export function board(data: Details, at: number, delivery?: Delivery): Message {
     status === 'confirmed' && (item.voice_id
       ? `[Join voice channel](${channelLink(item.guild_id, item.voice_id)})`
       : `**Meet in** <#${item.channel_id}>`),
+    status === 'confirmed' && eventId && `[Open Discord Event](https://discord.com/events/${item.guild_id}/${eventId})`,
     status !== 'cancelled' && `**RSVPs** ${rsvps.going}${item.capacity ? `/${item.capacity}` : ''} going • ${rsvps.maybe} maybe • ${rsvps.declined} can’t attend`,
+    status === 'confirmed' && waiting > 0 && `**Waitlist** ${waiting} waiting or offered`,
+    status === 'confirmed' && rsvps.reconfirm > 0 && `**RSVP again** ${rsvps.reconfirm} pending after reschedule`,
     status === 'confirmed' && going.length > 0 &&
       `**Going** ${going.map(id => `<@${id}>`).join(', ')}${rsvps.going > going.length ? ` +${rsvps.going - going.length} more` : ''}`,
     status !== 'cancelled' && games.some(game => game.rawg_id) && '[Game data by RAWG](https://rawg.io/)',
   ].filter(Boolean)
   const listings = [
-    ...games.slice(0, 8).map(game => `#${game.id} ${escapeText(game.name)} · ${game.votes} vote(s)`),
+    ...games.slice(0, 8).map(game => {
+      const tags = partyLabel(game)
+      return `#${game.id} ${escapeText(game.name)} · ${game.votes} vote(s)${tags ? ` · ${tags}` : ''}`
+    }),
     games.length > 8 && `${games.length - 8} more games in the vote menu or companion site.`,
     ...slots.map(slot => `${timestamp(slot.starts_at)} · ${slot.available} available`),
   ].filter(Boolean)
   // Channel boards are snapshots. The details button always reads current totals.
   if (!delivery && listings.length) highlights.push('', listings.join('\n').slice(0, 1900))
   if (!delivery) highlights.push(`\nSession ID: \`${item.id}\``)
-  const prefix = delivery?.kind === 'reminder' ? 'Coming up · ' : status === 'confirmed' ? 'Confirmed · ' : ''
+  const prefix = delivery?.kind === 'rescheduled' ? 'Rescheduled · '
+    : delivery?.kind === 'reminder' ? 'Coming up · ' : status === 'confirmed' ? 'Confirmed · ' : ''
   return {
     embeds: [{
       title: prefix + escapeText(item.title),
@@ -96,5 +105,18 @@ export function board(data: Details, at: number, delivery?: Delivery): Message {
       footer: delivery ? { text: `Play Villa · ${delivery.id}` } : undefined,
     }],
     components: controls(item, at),
+  }
+}
+
+
+export function spotOffer(item: Session, delivery: Delivery, offer: { user_id: string; offered_until: number }): Message {
+  return {
+    content: `<@${offer.user_id}>`,
+    embeds: [{
+      title: 'A game night spot opened',
+      description: `A seat for **${escapeText(item.title)}** is held for you until ${timestamp(offer.offered_until, 'R')}. Select Going to accept it.`,
+      footer: { text: `Play Villa · ${delivery.id}` },
+    }],
+    components: [row(button(key('going', item), 'Going', 3), button(key('show', item), 'View details'))],
   }
 }

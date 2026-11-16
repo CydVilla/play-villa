@@ -1,5 +1,5 @@
 import { discord, retrySeconds } from './discord-api.ts'
-import { board } from './presentation.ts'
+import { board, spotOffer } from './presentation.ts'
 import { details, rows, statement } from './store.ts'
 import { nowSeconds, snowflake, type Delivery, type Env, type Session } from './types.ts'
 
@@ -14,7 +14,8 @@ async function finish(
 }
 
 function shouldSend(delivery: Delivery, item: Session, at: number) {
-  if (delivery.kind === 'reminder') return item.status === 'confirmed' && item.starts_at! > at
+  if (delivery.revision !== item.revision) return false
+  if (delivery.kind === 'reminder' || delivery.kind === 'rescheduled' || delivery.kind === 'offer') return item.status === 'confirmed' && item.starts_at! > at
   return delivery.kind === item.status
 }
 
@@ -57,11 +58,24 @@ async function deliver(env: Env, id: number, at: number) {
   if (delivery.attempted_at) return reconcile(env, delivery, item, at)
   if (!shouldSend(delivery, item, at)) return finish(env, delivery, 'skipped', null, null)
 
-  const message = board(await details(env.DB, item), at, delivery)
+  const offer = delivery.kind === 'offer' ? await statement(env.DB, `
+    SELECT user_id, offered_until FROM waitlist WHERE id = ? AND session_id = ? AND offered_until > ?
+  `, delivery.occurrence, item.id, at).first<{ user_id: string; offered_until: number }>() : null
+  if (delivery.kind === 'offer' && (!offer || !snowflake(offer.user_id))) {
+    return finish(env, delivery, 'skipped', null, null)
+  }
+  const message = offer ? spotOffer(item, delivery, offer) : board(await details(env.DB, item), at, delivery)
   const attemptedAt = nowSeconds()
   const marked = await statement(env.DB, `
     UPDATE deliveries SET attempted_at = ? WHERE id = ? AND claim = ? AND lease_until > ?
-  `, attemptedAt, id, delivery.claim, attemptedAt).run()
+    AND EXISTS (
+      SELECT 1 FROM sessions s WHERE s.id = deliveries.session_id AND s.revision = deliveries.revision
+      AND s.status = ?
+    )
+    AND (kind <> 'offer' OR EXISTS (
+      SELECT 1 FROM waitlist WHERE id = deliveries.occurrence AND session_id = deliveries.session_id AND offered_until > ?
+    ))
+  `, attemptedAt, id, delivery.claim, attemptedAt, item.status, attemptedAt).run()
   if (!marked.meta.changes) return
   delivery.attempted_at = attemptedAt
 
@@ -70,7 +84,8 @@ async function deliver(env: Env, id: number, at: number) {
     response = await discord(`/channels/${item.channel_id}/messages`, {
       token: env.DISCORD_BOT_TOKEN,
       method: 'POST',
-      body: { ...message, flags: 4096, nonce: `pv-${delivery.id}`, enforce_nonce: true },
+      pingUser: offer?.user_id,
+      body: { ...message, flags: offer ? 0 : 4096, nonce: `pv-${delivery.id}`, enforce_nonce: true },
     })
   } catch {
     return finish(env, delivery, 'pending', null, 'Discord did not confirm delivery.', at + 60)

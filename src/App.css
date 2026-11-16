@@ -49,3 +49,5 @@ footer small { flex-basis: 100%; color: var(--muted); }
   .poll-grid { grid-template-columns: 1fr; }
   .vhs-header { align-items: start; }
 }
+
+.game-tags { display: block; color: var(--muted); }

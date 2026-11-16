@@ -1,12 +1,15 @@
+import { partyLabel } from './party.ts'
 import { rows } from './store.ts'
 import { snowflake, type Env, type Game, type Session, type Slot } from './types.ts'
 
 type PublicRow = Pick<Session, 'id' | 'title' | 'description' | 'timezone' | 'channel_id' | 'voice_id' |
-  'status' | 'deadline' | 'decided_at' | 'starts_at' | 'game_id' | 'duration' | 'capacity'> & {
+  'status' | 'deadline' | 'decided_at' | 'starts_at' | 'game_id' | 'duration' | 'capacity' | 'revision'> & {
   games: string
   slots: string
   response_counts: string
   message_id: string | null
+  event_id: string | null
+  waiting: number
 }
 
 export async function publicSchedule(env: Env, request: Request, at: number) {
@@ -33,16 +36,20 @@ export async function publicSchedule(env: Env, request: Request, at: number) {
       ORDER BY starts_at DESC LIMIT 20
     )
     SELECT id, title, description, timezone, channel_id, voice_id, status, deadline, decided_at,
-      starts_at, game_id, duration, capacity,
-      (SELECT json_group_array(json_object('id', id, 'name', name, 'image', image, 'rawg_id', rawg_id, 'votes', votes))
+      starts_at, game_id, duration, capacity, revision,
+      (SELECT event_id FROM discord_events WHERE session_id = s.id) AS event_id,
+      (SELECT count(*) FROM waitlist WHERE session_id = s.id) AS waiting,
+      (SELECT json_group_array(json_object('id', id, 'name', name, 'image', image, 'rawg_id', rawg_id, 'votes', votes,
+        'platforms', platforms, 'crossplay', crossplay, 'min_players', min_players, 'max_players', max_players))
         FROM (SELECT * FROM game_tally WHERE session_id = s.id ORDER BY votes DESC, id)) AS games,
       (SELECT json_group_array(json_object('starts_at', starts_at, 'available', available))
         FROM (SELECT * FROM slot_tally WHERE session_id = s.id ORDER BY starts_at)) AS slots,
-      (SELECT json_group_object(response, total) FROM (
-        SELECT response, count(*) AS total FROM rsvps WHERE session_id = s.id GROUP BY response
+      (SELECT json_group_object(status, total) FROM (
+        SELECT CASE WHEN needs_reconfirm = 1 THEN 'reconfirm' ELSE response END AS status, count(*) AS total
+        FROM rsvps WHERE session_id = s.id GROUP BY status
       )) AS response_counts,
       (SELECT message_id FROM deliveries WHERE session_id = s.id AND state = 'sent'
-        AND kind <> 'reminder' ORDER BY id DESC LIMIT 1) AS message_id
+        AND kind NOT IN ('reminder', 'offer') ORDER BY id DESC LIMIT 1) AS message_id
     FROM (SELECT * FROM current UNION ALL SELECT * FROM history) s
   `, id, channel, at, at, id, channel, at)
   headers.set('Cache-Control', 'public, max-age=15')
@@ -51,9 +58,11 @@ export async function publicSchedule(env: Env, request: Request, at: number) {
       ...item,
       status: item.status === 'open' && item.deadline <= at ? 'closed' : item.status,
       guild_id: id,
-      games: JSON.parse(item.games) as Game[],
+      games: (JSON.parse(item.games) as Game[]).map(game => ({
+        ...game, platforms: JSON.parse(game.platforms) as string[], tags: partyLabel(game),
+      })),
       slots: JSON.parse(item.slots) as Slot[],
-      response_counts: { going: 0, maybe: 0, declined: 0, ...JSON.parse(item.response_counts) },
+      response_counts: { going: 0, maybe: 0, declined: 0, reconfirm: 0, ...JSON.parse(item.response_counts) },
       past: item.status === 'confirmed' && item.starts_at! + item.duration * 60 <= at,
     })),
   }, { headers })
