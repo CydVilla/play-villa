@@ -1,29 +1,115 @@
 # Play Villa
 
-Play Villa is an open-source Discord bot for picking games and scheduling game nights. Your group can nominate games, vote, select every time that works, and update RSVPs from Discord. The optional retro companion site shows the same schedule, tallies, past winners, and calendar exports.
+Play Villa is a self-hosted Discord bot for picking a game and finding a time to play together. An organizer creates a game night, members vote on games and mark their available times, and the bot recommends a game and time. Confirmed nights get a Discord announcement and an optional reminder. [How to play](#run-your-first-game-night)
+
+The bot runs on Cloudflare Workers and stores each server’s settings, polls, and RSVPs in a D1 database. One Worker can also host the optional read-only companion site, with upcoming nights, vote totals, past winners, and calendar exports. A small community can run within the Workers and D1 Free quotas. [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) · [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/)
+
+## Set up your Discord server
+
+You’ll need a Cloudflare account, [Node.js 22.12 or later](https://nodejs.org/en/download), and **Manage Server** permission in a Discord server. Each installation creates its own Discord app, Worker, and database. If you’re using an agent, give it the [agent setup guide](docs/agent-setup.md).
+
+### 1. Download Play Villa
+
+[Download the ZIP](https://github.com/CydVilla/play-villa/archive/refs/heads/main.zip), then unzip it. You can also fork or clone the repo. Open a terminal in the folder containing `package.json` and install the dependencies.
+
+```sh
+npm ci
+```
+
+### 2. Create a Discord application
+
+1. Open the Discord Developer Portal and choose **New Application**. Name it whatever you want members to see and create it. Under **General Information**, copy the **Application ID** and **Public Key** for the next step. [Discord Developer Portal](https://discord.com/developers/applications)
+2. In Discord, open **User Settings → Advanced** and turn on **Developer Mode**. Right-click your server icon and choose **Copy Server ID**. [Discord’s guide to IDs](https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID)
+3. On the app’s **Installation** page, enable **Guild Install** and select **Discord Provided Link**. Under the default **Guild Install** settings, add the `bot` and `applications.commands` scopes. Select **View Channel**, **Send Messages**, **Embed Links**, and **Read Message History**. Save the page. [Discord’s app installation guide](https://docs.discord.com/developers/quick-start/getting-started#setting-up-an-application)
+
+### 3. Deploy to Cloudflare
+
+Sign in and create a database. Use a unique database name if you already have one called `play-villa-db`. Copy the database name and ID printed by Wrangler.
+
+```sh
+npx wrangler login
+npx wrangler d1 create play-villa-db --update-config=false
+cp wrangler.toml wrangler.local.toml
+```
+
+Open the new `wrangler.local.toml` in a text editor. At the top, choose a unique Worker `name`. Under `[[d1_databases]]`, replace `database_name` and `database_id` with the values Wrangler printed. Keep `binding = "DB"`. Append this block and replace the three placeholders with the values you copied from Discord.
+
+```toml
+[vars]
+DISCORD_APPLICATION_ID = "YOUR_APPLICATION_ID"
+DISCORD_PUBLIC_KEY = "YOUR_APPLICATION_PUBLIC_KEY"
+DISCORD_GUILD_ID = "YOUR_SERVER_ID"
+```
+
+Build the site, create the tables in your D1 database, and deploy the Worker. Copy the HTTPS Worker URL printed by the final command. Add `/health` to it in your browser. You should see `{"ok":true}`.
+
+```sh
+npm run build
+npx wrangler d1 migrations apply DB --remote --config wrangler.local.toml
+npx wrangler deploy --config wrangler.local.toml
+```
+
+### 4. Connect and install the bot
+
+1. Back in **General Information** in the Discord Developer Portal, paste your Worker URL plus `/discord/interactions` into **Interactions Endpoint URL**. Save it. Discord checks the public key by sending a signed test request. [Discord interactions](https://docs.discord.com/developers/interactions/receiving-and-responding)
+2. Open the install link from the app’s **Installation** page. Choose **Add to Server**, pick the server from step 2, and authorize it.
+3. On the app’s **Bot** page, generate or reset the token for **this new app**. Keep it handy while you finish the next step. It is a password for your bot. [Discord’s guide to bot tokens](https://docs.discord.com/developers/quick-start/getting-started)
+
+### 5. Store the token and register the command
+
+Run this command and paste the token at the Wrangler prompt. Cloudflare stores it as an encrypted Worker secret. [Worker secrets](https://developers.cloudflare.com/workers/configuration/secrets/)
+
+```sh
+npx wrangler secret put DISCORD_BOT_TOKEN --config wrangler.local.toml
+```
+
+Copy `.dev.vars.example` to `.dev.vars` in the project folder. Both `.dev.vars` and `wrangler.local.toml` are ignored by Git.
+
+```sh
+cp .dev.vars.example .dev.vars
+```
+
+Open `.dev.vars` in a local text editor. Fill in `DISCORD_APPLICATION_ID`, `DISCORD_GUILD_ID`, and `DISCORD_BOT_TOKEN`. Save it, then register the command.
+
+```sh
+npm run discord:register
+```
+
+When the script says it registered `/gamenight`, erase the token value from the local `.dev.vars` copy. The live bot uses the Worker secret.
+
+### 6. Pick a channel and try a poll
+
+In your server, select `/gamenight configure` from Discord’s slash-command picker. Set **channel** to your game-night text channel and **timezone** to a city-based time zone such as `America/New_York`. A server manager can also set an organizer role, voice channel, minimum attendance, and reminder timing.
+
+In that channel, use `/gamenight create` to open a clearly labeled test round. Enter a game name and a future start time. Try **Vote** and **Available times** on the board. Then use `/gamenight cancel` and select the test round. [Two-account verification](docs/setup.md#verify-a-fresh-installation-with-two-discord-accounts) · [Troubleshooting](docs/setup.md#troubleshooting)
+
+## Run your first game night
+
+| Who | Action |
+| --- | --- |
+| Organizer | Use `/gamenight create` with a game and a time. Enter dates as `YYYY-MM-DD HH:MM` in the server’s time zone, using a future date and 24-hour time. Add other dates in **alternatives** separated by commas, or set an RSVP **capacity**. |
+| Members | Use `/gamenight nominate` to add a game. Select **Vote** on the board to pick a game, change your vote, or retract it. |
+| Members | Use **Available times** to mark every slot you can make. Suggest a new time with `/gamenight propose-time`. Use **Going**, **Maybe**, or **Can’t attend** to RSVP. Availability and RSVP are saved separately. |
+| Organizer | Check **View details** for the current counts. Close voting with `/gamenight close` or wait for the deadline. Use `/gamenight confirm` to accept the recommended game and time or choose your own from the poll. |
+| Server manager | Run `/gamenight weekly` to see whether recurring polls are on. To start them, provide **open**, **close**, and **slots**. For example, use `mon 18:00`, `thu 18:00`, and `fri 20:00, sat 20:00` in those fields. Set **auto** to true if you want the bot to confirm a round when it has a winning vote and enough availability. |
+
+The recommended game has the most votes. The recommended slot has the most available players who can attend. Ties favor the earliest nomination or earliest start. A confirmation includes the time and a voice-channel link when one is configured. [Scheduling rules](docs/architecture.md#scheduling-and-ballots)
+
+## Optional setup
+
+- [Publish the companion site](docs/setup.md#publish-the-companion-site) to share a read-only schedule for one channel. The bot works with a private Discord schedule by default.
+- [Enable RAWG search](docs/setup.md#enable-game-search) for game lookup. Members can always nominate a game by name.
+- [Host the companion on GitHub Pages](docs/setup.md#optional-github-pages-companion) if you already use Pages.
+- [Set up with an agent](docs/agent-setup.md) for gathering settings, deployment, secret entry, and verification.
+
+<details>
+<summary>Preview the companion site</summary>
 
 ![Play Villa companion site with sample game nights](docs/companion.png)
 
-## Use it in your Discord server
-
-Fork or clone the repository and follow the [self-hosting guide](docs/setup.md). Each community supplies its own Discord application and database. Server IDs, channels, tokens, links and optional branding are configured per deployment. A single-worker install can serve the site and bot together, with GitHub Pages available for the site if you already use it.
-
-The expected cost for a small community on Cloudflare Workers and D1 Free is $0/month within the published quotas. Custom nominations and the companion work without a RAWG account. [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) · [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/)
-
-## In Discord
-
-| Action | How |
-| --- | --- |
-| Set up the server | Run `/gamenight configure` with an announcement channel and IANA time zone. |
-| Open a one-off poll | Run `/gamenight create` with a game and time. Add alternate slots, a deadline, a description or a capacity as needed. |
-| Nominate a game | Run `/gamenight nominate` with a custom game name, or a result ID from `/gamenight search` when RAWG is enabled. |
-| Vote or change plans | Use the board’s **Vote**, **Available times**, and RSVP buttons. Use `/gamenight propose-time` to suggest a new slot. |
-| Close or confirm | Organizers can edit, close, confirm or cancel. To override a recommendation, choose an explicit game or time in `/gamenight confirm`. |
-| Run a weekly poll | Set the opening, deadline and play slots with `/gamenight weekly`. Enable automatic confirmation when the group wants quorum-based scheduling. |
+</details>
 
 ## Develop locally
-
-Use Node.js 22.12 or later.
 
 ```sh
 npm ci
@@ -32,8 +118,6 @@ npm run db:local
 npm run dev:worker
 ```
 
-The Worker and built website are available on port 8787. For frontend hot reload, run `npm start` separately. Vite proxies API requests to the local Worker. Commands and the public schedule require the appropriate variables in `.dev.vars` copied from `.dev.vars.example`.
+The local Worker and built site are available on port 8787. For frontend hot reload, run `npm start` separately. Vite proxies API requests to the local Worker. Use `.dev.vars.example` to see the settings the local Worker accepts.
 
-Run `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build` before sending changes. The integration tests use SQLite through a D1 adapter and mock the Discord API. See the [architecture and operational notes](docs/architecture.md) for behavior, limits, and delivery recovery.
-
-[MIT license](LICENSE)
+Run `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`. Update the setup and usage docs when a change affects users, and the architecture or configuration examples when it affects operators. [Documentation map](AGENTS.md#keep-documentation-in-sync) · [Architecture and operations](docs/architecture.md) · [MIT license](LICENSE)
