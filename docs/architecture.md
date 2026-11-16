@@ -14,8 +14,12 @@ A persistent Gateway process would add an always-on service and connection manag
 - An organizer can confirm a nominated game and proposed future time even when a ballot has no recommendation, by choosing both in Discord. Automatic confirmation requires a game vote and availability at or above the quorum. Below quorum, the round closes and waits for a decision.
 - Members can propose extra times while voting is open. A session supports ten slots and 24 games, leaving a Discord select option for vote retraction. Existing time choices are preserved on edits. Rescheduling a confirmed night keeps its game and ID, increments its revision, and marks earlier Going and Maybe responses for reconfirmation. Use a replacement poll to change the confirmed game.
 - Each waitlist is FIFO. A seat offer reserves capacity for up to 30 minutes and expires at the start at the latest. A release or expiry creates the next offer in the same database batch as the queue update. Rescheduling clears the waitlist so members can join for the new time.
-- A rematch copies the winning game and its tags along with the prior timezone, voice channel, duration, and capacity. Votes, availability, and RSVPs start empty. Party filters use member-supplied metadata, and a random draw leaves the tally intact.
+- A rematch copies the winning game, its game details and tags, the prior timezone, voice channel, duration, and capacity. Votes, availability, and RSVPs start empty. Party filters use member-supplied tags, and a random draw leaves the tally intact.
 - Browser-local records from the old site cannot establish a verified voter identity or a shared history. The new deployment starts with its own clean database.
+
+## Game lookup
+
+The optional Worker secret `RAWG_API_KEY` enables server-side searches and game lookup by ID. Search and detail requests each have a ten-second per-guild cooldown, so a member can pick a search result immediately. The Worker saves available platform names, genres, release date, publisher, a RAWG page link, and approved RAWG artwork with the nomination. Organizers can update member-supplied game notes while voting is open. The companion API returns the saved details with the existing public channel scope. Older nominations keep their existing fields and have an empty details object after migration. [RAWG setup](setup.md#enable-game-search)
 
 ## Delivery
 

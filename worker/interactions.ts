@@ -1,7 +1,7 @@
 import { attendance, offerSpots, reschedule } from './attendance.ts'
 import { parsePlatforms, shortlist } from './party.ts'
 import { escapeText, timestamp, type Message } from './discord-api.ts'
-import { board, timeMenu, voteMenu } from './presentation.ts'
+import { board, gameDetailsText, rawgResults, timeMenu, voteMenu } from './presentation.ts'
 import { allowRawg, rawgGame, searchRawg } from './rawg.ts'
 import {
   acceptsBallots, addSlot, availability, checkedLabel, close, confirm, details, guild, manualSession,
@@ -257,24 +257,49 @@ function tagOptions(opts: Options): GameTags {
   }
 }
 
+async function nominate(ctx: Context, item: Session, rawgId: number | null, opts?: Options) {
+  votingOpen(item, ctx.now)
+  const name = opts?.text('game') ?? ''
+  if (Boolean(rawgId) === Boolean(name)) throw new InputError('Provide either a custom game name or a RAWG game ID.')
+  const tags = opts ? tagOptions(opts) : undefined
+  const notes = opts?.text('notes')
+  const note = notes ? checkedLabel(notes, 200) : undefined
+  if (rawgId) await allowRawg(ctx.env, ctx.guildId, ctx.now, 'details')
+  const game = rawgId ? await rawgGame(ctx.env, rawgId) : null
+  const gameName = game?.name ?? checkedLabel(name, 100)
+  const gameDetails = { ...game?.details, notes: note }
+  const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [
+    nomination(ctx.db, item.id, gameName, ctx.now, gate, {
+      ...tags, rawg_id: game?.id, image: game?.image, game_details: JSON.stringify(gameDetails),
+    }),
+  ])
+  if (!result?.[0]) return reply('The game is already listed, the ballot is full, or voting has closed.')
+  const summary = gameDetailsText(gameDetails)
+  const attribution = game && !gameDetails.sourceUrl ? '\n[Game data by RAWG](https://rawg.io/)' : ''
+  return reply(`Added **${escapeText(gameName)}** to the ballot.${summary ? `\n${summary}` : ''}${attribution}`)
+}
+
 async function updateTags(ctx: Context, item: Session, opts: Options) {
   votingOpen(item, ctx.now)
   const id = positive(opts.text('game'))
   const tags = tagOptions(opts)
   const platforms = opts.text('platforms') ? tags.platforms : null
-  if (platforms === null && tags.crossplay === null && tags.min_players === null && tags.max_players === null) {
-    throw new InputError('Provide at least one game tag.')
+  const noteText = opts.text('notes')
+  const note = opts.values.get('clear_notes') === true ? null : noteText ? checkedLabel(noteText, 200) : undefined
+  if (platforms === null && tags.crossplay === null && tags.min_players === null && tags.max_players === null && note === undefined) {
+    throw new InputError('Provide a game tag or a note to update.')
   }
   const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [
     statement(ctx.db, `
       UPDATE games SET platforms = coalesce(?, platforms), crossplay = coalesce(?, crossplay),
-        min_players = coalesce(?, min_players), max_players = coalesce(?, max_players)
+        min_players = coalesce(?, min_players), max_players = coalesce(?, max_players), game_details = json_patch(game_details, ?)
       WHERE id = ? AND session_id = ? AND ${gate}
       AND EXISTS (SELECT 1 FROM sessions WHERE id = games.session_id AND ${acceptsBallots})
       AND coalesce(?, min_players, 1) <= coalesce(?, max_players, 99)
-    `, platforms, tags.crossplay, tags.min_players, tags.max_players, id, item.id, ctx.now, tags.min_players, tags.max_players),
+    `, platforms, tags.crossplay, tags.min_players, tags.max_players, JSON.stringify({ notes: note }),
+    id, item.id, ctx.now, tags.min_players, tags.max_players),
   ])
-  return reply(result?.[0] ? 'Game tags updated.' : 'The game or voting window changed, or the player range is invalid.')
+  return reply(result?.[0] ? 'Game information updated.' : 'The game or voting window changed, or the player range is invalid.')
 }
 
 async function rematch(ctx: Context, settings: Guild, item: Session, opts: Options) {
@@ -294,12 +319,16 @@ async function slash(ctx: Context): Promise<ActionResult> {
   if (opts.action === 'weekly') return weekly(ctx, settings, opts)
   if (opts.action === 'create') return create(ctx, settings, opts)
   if (opts.action === 'search') {
-    requiredChannel(ctx, settings)
+    const id = opts.text('session')
+    const item = id ? await scopedSession(ctx, id) : undefined
+    if (item) votingOpen(item, ctx.now)
+    else requiredChannel(ctx, settings)
     const query = checkedLabel(opts.text('query'), 80)
-    await allowRawg(ctx.env, ctx.guildId, ctx.now)
+    if (query.length < 2) throw new InputError('Search for at least two characters.')
+    await allowRawg(ctx.env, ctx.guildId, ctx.now, 'search')
     const results = await searchRawg(ctx.env, query)
-    return reply(results.length ? `${results.map(game => `**${escapeText(game.name)}** · ID \`${game.id}\``).join('\n')}\nUse the ID with \`/gamenight nominate\`. [Game data by RAWG](https://rawg.io/)`
-      : 'No RAWG results found. Use /gamenight nominate with a custom game name.')
+    return results.length ? { message: rawgResults(results, item) }
+      : reply('No RAWG results found. Use /gamenight nominate with a custom game name.')
   }
   const item = await scopedSession(ctx, opts.text('session'))
   if (opts.action === 'rematch') return rematch(ctx, settings, item, opts)
@@ -309,19 +338,7 @@ async function slash(ctx: Context): Promise<ActionResult> {
       opts.number('players', 1, 99), opts.values.get('surprise') === true))
   }
   if (opts.action === 'show') return { message: board(await details(ctx.db, item), ctx.now) }
-  if (opts.action === 'nominate') {
-    votingOpen(item, ctx.now)
-    const name = opts.text('game')
-    const rawgId = opts.number('rawg_id', 1, 2147483647)
-    if (Boolean(rawgId) === Boolean(name)) throw new InputError('Provide either a custom game name or a RAWG game ID.')
-    if (rawgId) await allowRawg(ctx.env, ctx.guildId, ctx.now)
-    const game = rawgId ? await rawgGame(ctx.env, rawgId) : null
-    const gameName = game?.name ?? checkedLabel(name, 100)
-    const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [
-      nomination(ctx.db, item.id, gameName, ctx.now, gate, { ...tagOptions(opts), rawg_id: game?.id, image: game?.image }),
-    ])
-    return reply(result?.[0] ? `Added **${escapeText(gameName)}** to the ballot.` : 'The game is already listed, the ballot is full, or voting has closed.')
-  }
+  if (opts.action === 'nominate') return nominate(ctx, item, opts.number('rawg_id', 1, 2147483647), opts)
   if (opts.action === 'propose-time') {
     votingOpen(item, ctx.now)
     const starts = parseFuture(opts.text('time'), item.timezone, ctx.now)
@@ -384,6 +401,11 @@ async function component(ctx: Context): Promise<ActionResult> {
   const values = ctx.interaction.data?.values ?? []
   if (action === 'show') return { message: board(await details(ctx.db, item), ctx.now) }
   if (revision !== item.revision) throw new InputError('This game night moved. Open View details or use the updated board to RSVP.')
+  if (action === 'rawg' && values.length === 1) {
+    const rawgId = positive(values[0])
+    if (rawgId > 2147483647) throw new InputError('Choose a valid RAWG game from the list.')
+    return nominate(ctx, item, rawgId)
+  }
   if (action === 'going' || action === 'maybe' || action === 'declined') {
     const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate =>
       attendance(ctx.db, id, revision, ctx.user, action as RSVP, ctx.now, gate))
@@ -451,14 +473,16 @@ export async function autocomplete(env: Env, interaction: Interaction, now: numb
   const filter = (name: string, value: string) => name.toLowerCase().includes(query) || value.startsWith(query)
   if (focus.name === 'session') {
     const rematches = command?.name === 'rematch'
+    const searching = command?.name === 'search'
     return rows<{ name: string; value: string }>(ctx.db, `
       SELECT substr(title, 1, 74) || ' · ' || status AS name, id AS value
       FROM sessions WHERE guild_id = ? AND channel_id = ?
       AND (instr(lower(title), ?) OR instr(id, ?) OR ? = '')
       ${rematches ? "AND status = 'confirmed' AND starts_at + duration * 60 <= ?" : ''}
+      ${searching ? `AND ${acceptsBallots}` : ''}
       ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'closed' THEN 1 WHEN 'confirmed' THEN 2 ELSE 3 END,
         created_at DESC LIMIT 25
-    `, ctx.guildId, ctx.channelId, query, query, query, ...(rematches ? [now] : []))
+    `, ctx.guildId, ctx.channelId, query, query, query, ...(rematches || searching ? [now] : []))
   }
   const item = await scopedSession(ctx, options(interaction).text('session'))
   if (focus.name === 'game') {

@@ -33,12 +33,25 @@ function purchase(game) {
   return `https://www.amazon.com/s?${new URLSearchParams({ k: `${game.name} video game`, tag: amazon })}`
 }
 
+function GameDetails({ game }) {
+  const { platforms, genres, released, publisher, notes, sourceUrl } = game?.details ?? {}
+  const facts = [platforms?.join(', '), genres?.join(', '), released && `Released ${released}`, publisher].filter(Boolean).join(' · ')
+  return (
+    <>
+      {facts && <small className="game-tags">{facts}</small>}
+      {notes && <small className="game-tags">{notes}</small>}
+      {sourceUrl && <small className="game-tags"><External href={sourceUrl}>Game page on RAWG ↗</External></small>}
+    </>
+  )
+}
+
 function GameTile({ game }) {
   const tags = game?.tags
   return (
     <li className="game-tile">
       {game.image && <img src={game.image} alt="" loading="lazy" referrerPolicy="no-referrer" />}
-      <span>{game.name}{tags && <small className="game-tags">{tags}</small>}</span><span className="metric">{game.votes} {game.votes === 1 ? 'vote' : 'votes'}</span>
+      <span>{game.name}{tags && <small className="game-tags">{tags}</small>}<GameDetails game={game} /></span>
+      <span className="metric">{game.votes} {game.votes === 1 ? 'vote' : 'votes'}</span>
     </li>
   )
 }
@@ -67,6 +80,7 @@ function Session({ item }) {
         {confirmed && <p className="event-date"><Time at={item.starts_at} /> · {item.duration} min</p>}
         {confirmed && game?.votes > 0 && <p className="muted">{game.votes} {game.votes === 1 ? 'vote' : 'votes'} in the poll</p>}
         {confirmed && tags && <p className="game-tags">{tags}</p>}
+        {confirmed && <GameDetails game={game} />}
         {item.description && <p className="description">{item.description}</p>}
       </header>
       {confirmed && game?.image && <img className="winner-art" src={game.image} alt="" loading="lazy" referrerPolicy="no-referrer" />}

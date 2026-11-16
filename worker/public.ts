@@ -1,6 +1,6 @@
 import { partyLabel } from './party.ts'
 import { rows } from './store.ts'
-import { snowflake, type Env, type Game, type Session, type Slot } from './types.ts'
+import { snowflake, type Env, type Game, type GameDetails, type Session, type Slot } from './types.ts'
 
 type PublicRow = Pick<Session, 'id' | 'title' | 'description' | 'timezone' | 'channel_id' | 'voice_id' |
   'status' | 'deadline' | 'decided_at' | 'starts_at' | 'game_id' | 'duration' | 'capacity' | 'revision'> & {
@@ -40,7 +40,8 @@ export async function publicSchedule(env: Env, request: Request, at: number) {
       (SELECT event_id FROM discord_events WHERE session_id = s.id) AS event_id,
       (SELECT count(*) FROM waitlist WHERE session_id = s.id) AS waiting,
       (SELECT json_group_array(json_object('id', id, 'name', name, 'image', image, 'rawg_id', rawg_id, 'votes', votes,
-        'platforms', platforms, 'crossplay', crossplay, 'min_players', min_players, 'max_players', max_players))
+        'platforms', platforms, 'crossplay', crossplay, 'min_players', min_players, 'max_players', max_players,
+        'game_details', game_details))
         FROM (SELECT * FROM game_tally WHERE session_id = s.id ORDER BY votes DESC, id)) AS games,
       (SELECT json_group_array(json_object('starts_at', starts_at, 'available', available))
         FROM (SELECT * FROM slot_tally WHERE session_id = s.id ORDER BY starts_at)) AS slots,
@@ -58,8 +59,9 @@ export async function publicSchedule(env: Env, request: Request, at: number) {
       ...item,
       status: item.status === 'open' && item.deadline <= at ? 'closed' : item.status,
       guild_id: id,
-      games: (JSON.parse(item.games) as Game[]).map(game => ({
+      games: (JSON.parse(item.games) as Game[]).map(({ game_details, ...game }) => ({
         ...game, platforms: JSON.parse(game.platforms) as string[], tags: partyLabel(game),
+        details: JSON.parse(game_details) as GameDetails,
       })),
       slots: JSON.parse(item.slots) as Slot[],
       response_counts: { going: 0, maybe: 0, declined: 0, reconfirm: 0, ...JSON.parse(item.response_counts) },

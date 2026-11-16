@@ -333,7 +333,7 @@ test('reference constraints reject confirmations tied to a different session', a
   await assert.rejects(statement(h.env.DB, 'UPDATE sessions SET game_id = 2 WHERE id = ?', id).run(), /constraint/i)
 })
 
-test('RAWG lookup is optional, server-side, throttled, and rejects an untrusted image host', async t => {
+test('RAWG search and selection save details for the picked game while protecting keys and artwork', async t => {
   const h = harness()
   await h.configure()
   const { id } = await h.create()
@@ -343,24 +343,74 @@ test('RAWG lookup is optional, server-side, throttled, and rejects an untrusted 
     assert.equal(request.origin, 'https://api.rawg.io')
     assert.equal(request.searchParams.get('key'), 'mock-rawg-key')
     assert.equal(options.redirect, 'manual')
-    const game = { id: 123, name: 'Portal 2', background_image: 'https://untrusted.example/test.jpg' }
-    return Response.json(request.pathname.endsWith('/123') ? game : { results: [game] })
+    const game = {
+      id: 123, name: 'Portal 2', slug: 'portal-2', background_image: 'https://untrusted.example/test.jpg',
+      platforms: [{ platform: { name: 'PC' } }, { platform: { name: 'PlayStation 3' } }, null],
+      genres: [{ name: 'Puzzle' }], released: '2011-04-19',
+    }
+    if (request.pathname.endsWith('/123')) return Response.json({ ...game, publishers: [{ name: 'Valve' }] })
+    return Response.json({ results: request.searchParams.get('search') === 'Unknown' ? [] : [game] })
   })
-  function lookup(name: string, values: { name: string; value: string | number }[], time: number, n: number) {
+  let sequence = 0
+  function lookup(name: string, values: Record<string, string | number>, time: number) {
     return handleInteraction(env, {
       type: 2, application_id: app, guild_id: server, channel_id: channel, token: 'mock-token',
-      id: String(300000000000000000n + BigInt(n)), member: { user: { id: member } },
-      data: { name: 'gamenight', options: [{ name, options: values }] },
+      id: String(300000000000000000n + BigInt(++sequence)), member: { user: { id: member } },
+      data: { name: 'gamenight', options: [{ name, options: Object.entries(values).map(([name, value]) => ({ name, value })) }] },
     }, time)
   }
-  const result = await lookup('search', [{ name: 'query', value: 'Portal' }], at, 1)
+  const result = await lookup('search', { query: 'Portal', session: id }, at)
   assert.match(result.message.content!, /Game data by RAWG/)
-  assert.doesNotMatch(result.message.content!, /mock-rawg-key/)
-  const nomination = [{ name: 'session', value: id }, { name: 'rawg_id', value: 123 }]
-  assert.match((await lookup('nominate', nomination, at + 1, 2)).message.content!, /wait ten seconds/)
-  assert.match((await lookup('nominate', nomination, at + 10, 3)).message.content!, /Added/)
-  assert.equal(h.one('SELECT image FROM games WHERE rawg_id = 123')?.image, null)
-  assert.equal(search.mock.callCount(), 2)
+  assert.match(result.message.embeds![0].description!, /PC, PlayStation 3 · Puzzle · 2011/)
+  assert.doesNotMatch(JSON.stringify(result.message), /mock-rawg-key|untrusted\.example/)
+  assert.match((await lookup('search', { query: 'Portal' }, at + 1)).message.content!, /wait ten seconds/)
+
+  const [row] = result.message.components! as { components: { custom_id: string; options: { value: string }[] }[] }[]
+  const [menu] = row.components
+  const control = {
+    type: 3, application_id: app, guild_id: server, channel_id: channel, token: 'mock-token',
+    id: '400000000000000001', member: { user: { id: member } },
+    data: { custom_id: menu.custom_id, values: [menu.options[0].value] },
+  }
+  assert.match((await handleInteraction(env, { ...control, channel_id: otherChannel }, at + 1)).message.content!, /this channel/)
+  const picked = await handleInteraction(env, control, at + 1)
+  assert.match(picked.message.content!, /Added \*\*Portal 2\*\*/)
+  assert.match(picked.message.content!, /Publisher\*\* Valve/)
+  assert.match((await lookup('nominate', { session: id, rawg_id: 123 }, at + 2)).message.content!, /wait ten seconds/)
+  assert.match((await lookup('nominate', { session: id, rawg_id: 123 }, at + 11)).message.content!, /already listed/)
+  assert.match((await lookup('search', { query: 'Unknown', session: id }, at + 11)).message.content!, /custom game name/)
+  const saved = h.one('SELECT image, crossplay FROM games WHERE rawg_id = 123')
+  assert.equal(saved?.image, null)
+  assert.equal(saved?.crossplay, null)
+  assert.equal(search.mock.callCount(), 4)
+
+  const selectedId = String(h.one('SELECT id FROM games WHERE rawg_id = 123')?.id)
+  await h.action('confirm', { session: id, game: selectedId, time: String(time1) })
+  const board = (await h.action('show', { session: id })).message.embeds![0].description!
+  assert.match(board, /Platforms\*\* PC, PlayStation 3/)
+  assert.match(board, /Publisher\*\* Valve/)
+  assert.match((await handleInteraction(env, control, at + 12)).message.content!, /Voting has closed/)
+  const response = await publicSchedule({ ...env, PUBLIC_GUILD_ID: server, PUBLIC_CHANNEL_ID: channel },
+    new Request('https://example.com/api/schedule'), at)
+  const { sessions } = await response.json() as { sessions: { games: { rawg_id: number; details: object }[] }[] }
+  assert.deepEqual(sessions[0].games.find(game => game.rawg_id === 123)?.details, {
+    platforms: ['PC', 'PlayStation 3'], genres: ['Puzzle'], released: '2011-04-19',
+    publisher: 'Valve', sourceUrl: 'https://rawg.io/games/portal-2',
+  })
+})
+
+test('manual nominees can carry editable notes without a RAWG key', async () => {
+  const h = harness()
+  await h.configure()
+  const { id } = await h.create()
+  const result = await h.action('nominate', { session: id, game: 'Homebrew tabletop', notes: 'Bring a pencil.' }, { user: member, admin: false })
+  assert.match(result.message.content!, /Game note\*\* Bring a pencil/)
+  const game = String(h.one("SELECT id FROM games WHERE name = 'Homebrew tabletop'")?.id)
+  await h.action('tag', { session: id, game, clear_notes: true })
+  assert.equal(h.one('SELECT game_details FROM games WHERE id = ?', game)?.game_details, '{}')
+  await h.action('tag', { session: id, game, notes: 'Bring a pencil and dice.' })
+  await h.action('confirm', { session: id, game, time: String(time1) })
+  assert.match((await h.action('show', { session: id })).message.embeds![0].description!, /pencil and dice/)
 })
 
 test('a cancelled session cannot send its previously scheduled reminder', async t => {
@@ -391,9 +441,14 @@ test('upgrading a populated D1 preserves RSVPs and Discord delivery IDs', () => 
     INSERT INTO sessions (id, guild_id, channel_id, title, timezone, created_at, deadline, duration, reminder, minimum)
     VALUES ('old', '${server}', '${channel}', 'Old night', 'UTC', ${at}, ${at + 60}, 120, 60, 2);
     INSERT INTO rsvps VALUES ('old', '${member}', 'going');
+    INSERT INTO games (session_id, name, name_key, rawg_id) VALUES ('old', 'Portal 2', 'portal 2', 123);
+    INSERT INTO search_limits VALUES ('${server}', ${at + 10});
     UPDATE deliveries SET state = 'sent', message_id = '998000000000000001';
   `)
   db.apply('0002_game_night_upgrades.sql')
+  db.apply('0003_game_details.sql')
+  assert.equal(db.sqlite.prepare('SELECT game_details FROM game_tally WHERE rawg_id = 123').get()?.game_details, '{}')
+  assert.equal(db.sqlite.prepare('SELECT next_at FROM search_limits WHERE guild_id = ?').get(server)?.next_at, at + 10)
   assert.equal(db.sqlite.prepare("SELECT needs_reconfirm FROM rsvps WHERE session_id = 'old'").get()?.needs_reconfirm, 0)
   assert.equal(db.sqlite.prepare("SELECT message_id FROM deliveries WHERE session_id = 'old'").get()?.message_id, '998000000000000001')
   assert.deepEqual(db.sqlite.prepare('PRAGMA foreign_key_check').all(), [])
@@ -500,7 +555,7 @@ test('a rematch copies the confirmed game and its setup while starting fresh bal
   const h = harness()
   await h.action('configure', { channel, voice: otherChannel, timezone: 'UTC', duration: 90 })
   const { id } = await h.create({ capacity: 4 })
-  await h.action('tag', { session: id, game: '1', platforms: 'PC, Xbox', crossplay: true, max_players: 4 })
+  await h.action('tag', { session: id, game: '1', platforms: 'PC, Xbox', crossplay: true, max_players: 4, notes: 'Use the base game.' })
   await h.click('vote', id, member, ['1'])
   await h.click('going', id, member)
   await h.action('confirm', { session: id, game: '1', time: String(time1) })
@@ -514,6 +569,7 @@ test('a rematch copies the confirmed game and its setup while starting fresh bal
   assert.equal(item.duration, 90)
   assert.equal(item.voice_id, otherChannel)
   assert.equal(h.one('SELECT max_players FROM games WHERE session_id = ?', again.id)?.max_players, 4)
+  assert.equal(h.one("SELECT json_extract(game_details, '$.notes') AS note FROM games WHERE session_id = ?", again.id)?.note, 'Use the base game.')
   assert.equal(h.one('SELECT count(*) AS n FROM votes WHERE session_id = ?', again.id)?.n, 0)
   assert.equal(h.one('SELECT count(*) AS n FROM rsvps WHERE session_id = ?', again.id)?.n, 0)
 })

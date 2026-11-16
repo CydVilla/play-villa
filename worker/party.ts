@@ -1,5 +1,5 @@
 import { escapeText } from './discord-api.ts'
-import { InputError, type Game } from './types.ts'
+import { InputError, type Game, type GameTags } from './types.ts'
 
 const platformNames = new Map([
   ['pc', 'PC'], ['xbox', 'Xbox'], ['playstation', 'PlayStation'], ['switch', 'Switch'], ['mobile', 'Mobile'],
@@ -14,7 +14,7 @@ export function parsePlatforms(input: string) {
   return [...new Set(names)]
 }
 
-export function partyLabel(game: Game) {
+export function partyLabel(game: GameTags) {
   const platforms = (JSON.parse(game.platforms) as string[]).map(name => platformNames.get(name)).join(', ')
   const size = game.max_players !== null ? `${game.min_players ?? 1}–${game.max_players} players`
     : game.min_players !== null ? `${game.min_players}+ players` : ''

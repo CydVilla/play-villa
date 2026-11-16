@@ -1,12 +1,44 @@
 import { channelLink, escapeText, timestamp, type Message } from './discord-api.ts'
 import { partyLabel } from './party.ts'
 import { recommend, type Details } from './store.ts'
-import type { Delivery, Session } from './types.ts'
+import type { Delivery, GameDetails, Session } from './types.ts'
 
 const button = (custom_id: string, label: string, style = 2) => ({ type: 2, style, custom_id, label })
 const row = (...components: Record<string, unknown>[]) => ({ type: 1, components })
 const key = (action: string, item: Session) => `gn:${action}:${item.id}${item.revision ? `:${item.revision}` : ''}`
 const label = (slice: string, max = 100) => slice.length > max ? `${slice.slice(0, max - 1)}…` : slice
+
+export function gameDetailsText(details: GameDetails) {
+  return [
+    details.platforms?.length && `**Platforms** ${escapeText(details.platforms.join(', '))}`,
+    details.genres?.length && `**Genres** ${escapeText(details.genres.join(', '))}`,
+    details.released && `**Released** ${details.released}`,
+    details.publisher && `**Publisher** ${escapeText(details.publisher)}`,
+    details.notes && `**Game note** ${escapeText(details.notes)}`,
+    details.sourceUrl && `[Game page on RAWG](${details.sourceUrl})`,
+  ].filter(Boolean).join('\n')
+}
+
+export function rawgResults(games: { id: number; name: string; details: GameDetails }[], item?: Session): Message {
+  const preview = (details: GameDetails) =>
+    [details.platforms?.join(', '), details.genres?.join(', '), details.released].filter(Boolean).join(' · ')
+  const results = games.map(game => {
+    const summary = preview(game.details)
+    const source = game.details.sourceUrl ? ` · [RAWG page](${game.details.sourceUrl})` : ''
+    return `**${escapeText(game.name)}** · ID \`${game.id}\`${source}${summary ? `\n${escapeText(label(summary, 120))}` : ''}`
+  })
+  return {
+    content: item ? 'Choose a result below to nominate it. [Game data by RAWG](https://rawg.io/)'
+      : 'Use a result ID with `/gamenight nominate`, or choose a session when you search. [Game data by RAWG](https://rawg.io/)',
+    embeds: [{ description: results.join('\n\n') }],
+    components: item ? [row({
+      type: 3, custom_id: key('rawg', item), placeholder: 'Choose a game to nominate',
+      options: games.map(game => ({
+        label: game.name, value: String(game.id), description: label(preview(game.details)) || undefined,
+      })),
+    })] : undefined,
+  }
+}
 
 function controls(item: Session, at: number) {
   const { status, deadline } = item
@@ -63,6 +95,7 @@ export function board(data: Details, at: number, delivery?: Delivery): Message {
   const proposal = recommend(data, at)
   const suggestedGame = item.status === 'open' ? proposal.game : selected
   const suggestedTime = item.status === 'open' ? proposal.slot?.starts_at : item.starts_at
+  const gameDetails = selected && gameDetailsText(JSON.parse(selected.game_details) as GameDetails)
   const highlights = [
     item.description && escapeText(item.description),
     status === 'open' && `**Voting closes** ${timestamp(item.deadline, 'R')}`,
@@ -71,6 +104,7 @@ export function board(data: Details, at: number, delivery?: Delivery): Message {
     delivery?.kind === 'rescheduled' && 'The start time changed. Please RSVP again on this board.',
     status === 'confirmed' && item.starts_at && selected &&
       `**${escapeText(selected.name)}** • ${timestamp(item.starts_at, 'F')}`,
+    status === 'confirmed' && gameDetails,
     ['open', 'closed'].includes(status) && `**Recommended game** ${suggestedGame ? escapeText(suggestedGame.name) : 'Awaiting votes'}`,
     ['open', 'closed'].includes(status) && `**Recommended time** ${suggestedTime ? timestamp(suggestedTime) : 'Awaiting availability'}`,
     status === 'confirmed' && (item.voice_id
@@ -93,8 +127,12 @@ export function board(data: Details, at: number, delivery?: Delivery): Message {
     ...slots.map(slot => `${timestamp(slot.starts_at)} · ${slot.available} available`),
   ].filter(Boolean)
   // Channel boards are snapshots. The details button always reads current totals.
-  if (!delivery && listings.length) highlights.push('', listings.join('\n').slice(0, 1900))
-  if (!delivery) highlights.push(`\nSession ID: \`${item.id}\``)
+  if (!delivery) {
+    const sessionId = `\nSession ID: \`${item.id}\``
+    const remaining = Math.min(1900, 4096 - highlights.join('\n').length - sessionId.length - 3)
+    if (listings.length && remaining > 0) highlights.push('', listings.join('\n').slice(0, remaining))
+    highlights.push(sessionId)
+  }
   const prefix = delivery?.kind === 'rescheduled' ? 'Rescheduled · '
     : delivery?.kind === 'reminder' ? 'Coming up · ' : status === 'confirmed' ? 'Confirmed · ' : ''
   return {
