@@ -1,3 +1,4 @@
+import { syncEvents } from './events.ts'
 import { deliverPending } from './delivery.ts'
 import { mentions, patchReply } from './discord-api.ts'
 import { autocomplete, handleInteraction, type Interaction } from './interactions.ts'
@@ -49,7 +50,7 @@ export default {
     ctx.waitUntil((async () => {
       const { message, notify } = await handleInteraction(env, interaction, at)
       const tasks = [patchReply(env, interaction.token, message)]
-      if (notify) tasks.push(deliverPending(env, nowSeconds(), notify))
+      if (notify) tasks.push(deliverPending(env, nowSeconds(), notify), syncEvents(env, nowSeconds(), notify))
       await Promise.allSettled(tasks)
     })())
     return Response.json({ type: 5, data: { flags: 64, allowed_mentions: mentions } })
@@ -60,7 +61,7 @@ export default {
     try {
       await scheduleRounds(env.DB, at)
     } finally {
-      await deliverPending(env, at)
+      await Promise.all([deliverPending(env, at), syncEvents(env, at)])
     }
   },
 } satisfies ExportedHandler<Env>

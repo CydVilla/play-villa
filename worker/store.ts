@@ -1,4 +1,4 @@
-import { InputError, type Game, type Guild, type Param, type RSVP, type Session, type Slot } from './types.ts'
+import { InputError, type Game, type GameTags, type Guild, type Param, type RSVP, type Session, type Slot } from './types.ts'
 
 export function statement(db: D1Database, sql: string, ...args: Param[]) {
   return db.prepare(sql).bind(...args)
@@ -32,20 +32,24 @@ export async function mutate(
 
 export const acceptsBallots = "status = 'open' AND deadline > ?"
 
-export function nameKey(name: string) {
+function nameKey(name: string) {
   return name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase()
 }
 
-export function nomination(db: D1Database, id: string, name: string, at: number, gate: string, rawgId: number | null = null, image: string | null = null) {
+export function nomination(
+  db: D1Database, id: string, name: string, at: number, gate: string,
+  metadata?: GameTags & { rawg_id?: number | null; image?: string | null },
+) {
   return statement(db, `
-    INSERT INTO games (session_id, name, name_key, rawg_id, image)
-    SELECT id, ?, ?, ?, ? FROM sessions WHERE id = ? AND ${acceptsBallots} AND ${gate}
+    INSERT INTO games (session_id, name, name_key, rawg_id, image, platforms, crossplay, min_players, max_players)
+    SELECT id, ?, ?, ?, ?, ?, ?, ?, ? FROM sessions WHERE id = ? AND ${acceptsBallots} AND ${gate}
     AND (SELECT count(*) FROM games WHERE session_id = sessions.id) < 24
     ON CONFLICT DO NOTHING
-  `, name, nameKey(name), rawgId, image, id, at)
+  `, name, nameKey(name), metadata?.rawg_id ?? null, metadata?.image ?? null, metadata?.platforms ?? '[]',
+  metadata?.crossplay ?? null, metadata?.min_players ?? null, metadata?.max_players ?? null, id, at)
 }
 
-export function addSlot(db: D1Database, id: string, startsAt: number, gate: string, at = 0) {
+export function addSlot(db: D1Database, id: string, startsAt: number, gate: string, at: number) {
   return statement(db, `
     INSERT INTO slots (session_id, starts_at)
     SELECT id, ? FROM sessions WHERE id = ? AND ${acceptsBallots} AND deadline < ? AND ${gate}
@@ -85,56 +89,47 @@ export function availability(db: D1Database, id: string, user: string, selected:
   ]
 }
 
-export function attendance(db: D1Database, id: string, user: string, response: RSVP, now: number, gate: string) {
-  return statement(db, `
-    INSERT INTO rsvps (session_id, user_id, response)
-    SELECT s.id, ?, ? FROM sessions s
-    WHERE s.id = ? AND s.status <> 'cancelled' AND ${gate}
-    AND CASE WHEN s.status = 'confirmed' THEN s.starts_at + s.duration * 60
-      ELSE (SELECT max(starts_at) FROM slots WHERE session_id = s.id) END > ?
-    AND (? <> 'going' OR s.capacity IS NULL OR s.capacity > (
-      SELECT count(*) FROM rsvps r WHERE r.session_id = s.id AND r.response = 'going' AND r.user_id <> ?
-    ))
-    ON CONFLICT(session_id, user_id) DO UPDATE SET response = excluded.response
-  `, user, response, id, now, response, user)
-}
-
 export function manualSession(
   db: D1Database, settings: Guild, id: string, organizer: string, title: string, description: string,
   starts: number[], deadline: number, capacity: number | null, at: number, gate: string,
+  prior?: { session: Session; game: Game },
 ) {
   return [
     statement(db, `
       INSERT INTO sessions (id, guild_id, channel_id, voice_id, organizer_id, title, description,
         timezone, created_at, deadline, duration, reminder, minimum, capacity)
-      SELECT ?, id, channel_id, voice_id, ?, ?, ?, timezone, ?, ?, duration, reminder, minimum, ?
+      SELECT ?, id, channel_id, CASE WHEN ? THEN ? ELSE voice_id END, ?, ?, ?, coalesce(?, timezone), ?, ?,
+        coalesce(?, duration), coalesce(?, reminder), minimum, ?
       FROM guilds WHERE id = ? AND ${gate}
-    `, id, organizer, title, description, at, deadline, capacity, settings.id),
-    nomination(db, id, title, at, gate),
+    `, id, Number(Boolean(prior)), prior?.session.voice_id ?? null, organizer, title, description, prior?.session.timezone ?? null,
+      at, deadline, prior?.session.duration ?? null, prior?.session.reminder ?? null, capacity, settings.id),
+    nomination(db, id, title, at, gate, prior?.game),
     ...starts.map(time => addSlot(db, id, time, gate, at)),
   ]
 }
 
 export async function details(db: D1Database, item: Session) {
-  const [games, slots, counts, going, board] = await db.batch([
-    statement(db, 'SELECT id, name, image, rawg_id, votes FROM game_tally WHERE session_id = ? ORDER BY votes DESC, id', item.id),
+  const [games, slots, counts, going, queue, event] = await db.batch([
+    statement(db, 'SELECT id, name, image, rawg_id, votes, platforms, crossplay, min_players, max_players FROM game_tally WHERE session_id = ? ORDER BY votes DESC, id', item.id),
     statement(db, 'SELECT starts_at, available FROM slot_tally WHERE session_id = ? ORDER BY starts_at', item.id),
-    statement(db, 'SELECT response, count(*) AS total FROM rsvps WHERE session_id = ? GROUP BY response', item.id),
-    statement(db, "SELECT user_id FROM rsvps WHERE session_id = ? AND response = 'going' ORDER BY user_id LIMIT 20", item.id),
     statement(db, `
-      SELECT message_id FROM deliveries WHERE session_id = ? AND state = 'sent' AND kind <> 'reminder'
-      ORDER BY id DESC LIMIT 1
+      SELECT CASE WHEN needs_reconfirm = 1 THEN 'reconfirm' ELSE response END AS status, count(*) AS total
+      FROM rsvps WHERE session_id = ? GROUP BY status
     `, item.id),
+    statement(db, "SELECT user_id FROM rsvps WHERE session_id = ? AND response = 'going' AND needs_reconfirm = 0 ORDER BY user_id LIMIT 20", item.id),
+    statement(db, 'SELECT count(*) AS total FROM waitlist WHERE session_id = ?', item.id),
+    statement(db, 'SELECT event_id FROM discord_events WHERE session_id = ?', item.id),
   ])
-  const rsvps = { going: 0, maybe: 0, declined: 0 }
-  for (const row of counts.results as { response: RSVP; total: number }[]) rsvps[row.response] = row.total
+  const rsvps = { going: 0, maybe: 0, declined: 0, reconfirm: 0 }
+  for (const row of counts.results as { status: RSVP | 'reconfirm'; total: number }[]) rsvps[row.status] = row.total
   return {
     item,
     games: games.results as unknown as Game[],
     slots: slots.results as unknown as Slot[],
     going: (going.results as { user_id: string }[]).map(row => row.user_id),
     rsvps,
-    messageId: (board.results[0] as { message_id: string } | undefined)?.message_id ?? null,
+    waiting: (queue.results[0] as { total: number } | undefined)?.total ?? 0,
+    eventId: (event.results[0] as { event_id: string | null } | undefined)?.event_id ?? null,
   }
 }
 

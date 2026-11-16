@@ -1,10 +1,13 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 
 // Model the small D1 binding surface we use with actual SQLite and atomic batches.
-export function database() {
+export function database(migrate = true) {
   const sqlite = new DatabaseSync(':memory:')
-  sqlite.exec(readFileSync(new URL('../migrations/0001_game_nights.sql', import.meta.url), 'utf8'))
+  const migrations = new URL('../migrations/', import.meta.url)
+  const files = readdirSync(migrations).filter(name => name.endsWith('.sql')).sort()
+  const apply = (name: string) => sqlite.exec(readFileSync(new URL(name, migrations), 'utf8'))
+  if (migrate) files.forEach(apply)
 
   function prepare(sql: string, params: (string | number | null)[] = []) {
     function result() {
@@ -40,6 +43,6 @@ export function database() {
         throw error
       }
     },
-    sqlite,
+    sqlite, apply,
   }
 }

@@ -27,6 +27,7 @@ export interface Guild {
   minimum: number
   reminder: number
   duration: number
+  discord_events: number
   weekly: string | null
   weekly_version: string | null
   next_open_at: number | null
@@ -52,9 +53,17 @@ export interface Session {
   game_id: number | null
   starts_at: number | null
   decided_at: number | null
+  revision: number
 }
 
-export interface Game {
+export interface GameTags {
+  platforms: string
+  crossplay: number | null
+  min_players: number | null
+  max_players: number | null
+}
+
+export interface Game extends GameTags {
   id: number
   name: string
   rawg_id: number | null
@@ -72,7 +81,9 @@ export type RSVP = 'going' | 'maybe' | 'declined'
 export interface Delivery {
   id: number
   session_id: string
-  kind: 'open' | 'closed' | 'confirmed' | 'cancelled' | 'reminder'
+  kind: 'open' | 'closed' | 'confirmed' | 'cancelled' | 'reminder' | 'rescheduled' | 'offer'
+  revision: number
+  occurrence: number
   due_at: number
   next_at: number
   attempted_at: number | null

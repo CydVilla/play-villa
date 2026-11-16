@@ -34,10 +34,11 @@ function purchase(game) {
 }
 
 function GameTile({ game }) {
+  const tags = game?.tags
   return (
     <li className="game-tile">
       {game.image && <img src={game.image} alt="" loading="lazy" referrerPolicy="no-referrer" />}
-      <span>{game.name}</span><span className="metric">{game.votes} {game.votes === 1 ? 'vote' : 'votes'}</span>
+      <span>{game.name}{tags && <small className="game-tags">{tags}</small>}</span><span className="metric">{game.votes} {game.votes === 1 ? 'vote' : 'votes'}</span>
     </li>
   )
 }
@@ -53,17 +54,19 @@ function Session({ item }) {
   const open = item.status === 'open'
   const where = item.voice_id ? discord(item, item.voice_id) : discord(item)
   const calendar = confirmed ? {
-    id: item.id, start: item.starts_at, duration: item.duration, decidedAt: item.decided_at,
+    id: item.id, start: item.starts_at, duration: item.duration, decidedAt: item.decided_at, revision: item.revision,
     summary: `${community} · ${game?.name ?? item.title}`, description: item.description, location: where,
   } : null
   const store = purchase(game)
+  const tags = game?.tags
   return (
     <article className={`session ${confirmed ? 'session-confirmed' : ''}`}>
       <header className="session-heading">
-        <p className="status">{confirmed ? 'Confirmed' : open ? 'Voting open' : 'Awaiting confirmation'}</p>
+        <p className="status">{confirmed ? (item.revision ? 'Rescheduled' : 'Confirmed') : open ? 'Voting open' : 'Awaiting confirmation'}</p>
         <h3>{confirmed && game ? game.name : item.title}</h3>
         {confirmed && <p className="event-date"><Time at={item.starts_at} /> · {item.duration} min</p>}
         {confirmed && game?.votes > 0 && <p className="muted">{game.votes} {game.votes === 1 ? 'vote' : 'votes'} in the poll</p>}
+        {confirmed && tags && <p className="game-tags">{tags}</p>}
         {item.description && <p className="description">{item.description}</p>}
       </header>
       {confirmed && game?.image && <img className="winner-art" src={game.image} alt="" loading="lazy" referrerPolicy="no-referrer" />}
@@ -88,9 +91,12 @@ function Session({ item }) {
       <p className="attendance">
         {item.response_counts.going}{item.capacity ? `/${item.capacity}` : ''} going
         {' · '}{item.response_counts.maybe} maybe{' · '}{item.response_counts.declined} can’t attend
+        {item.waiting > 0 && ` · ${item.waiting} on waitlist`}
+        {item.response_counts.reconfirm > 0 && ` · ${item.response_counts.reconfirm} to reconfirm`}
       </p>
       <div className="session-actions">
         <External className="action" href={discord(item, item.channel_id, item.message_id)}>Open in Discord ↗</External>
+        {confirmed && item.event_id && <External className="action secondary" href={`https://discord.com/events/${item.guild_id}/${item.event_id}`}>Open Discord Event ↗</External>}
         {confirmed && item.voice_id && <External className="action secondary" href={where}>Join voice ↗</External>}
         {store && <External className="action secondary" href={store} sponsored>Find on Amazon ↗</External>}
       </div>
@@ -104,6 +110,7 @@ function History({ sessions }) {
   return (
     <section id="history" className="archive" aria-labelledby="history-label">
       <h2 id="history-label">Past game nights</h2>
+      <p className="muted">Organizers can use <code>/gamenight rematch</code> in Discord to play one again.</p>
       <ul className="history-list">
         {sessions.map(item => {
           const game = item.games.find(game => game.id === item.game_id)
