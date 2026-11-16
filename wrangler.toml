@@ -1,0 +1,17 @@
+name = "play-villa"
+main = "worker/index.ts"
+compatibility_date = "2026-06-01"
+
+[assets]
+directory = "./dist"
+run_worker_first = ["/api/*", "/discord/interactions", "/health"]
+
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "play-villa"
+# Replace this only in your local copy before any remote operation.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"

@@ -1,42 +1,40 @@
 {
   "name": "play-villa",
-  "version": "1.0.0",
-  "description": "community game voting app",
+  "version": "2.0.0",
+  "description": "Self-hosted Discord game nights and a retro companion website",
   "private": true,
-  "homepage": "https://CydVilla.github.io/play-villa",
-  "dependencies": {
-    "css-has-pseudo": "^7.0.3",
-    "language-tags": "^2.1.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "react-scripts": "5.0.1"
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
   },
   "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject",
-    "predeploy": "npm run build",
-    "deploy": "gh-pages -d build"
+    "start": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint src worker scripts tests vite.config.js",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "dev:worker": "npm run build && wrangler dev --test-scheduled",
+    "db:local": "wrangler d1 migrations apply DB --local",
+    "discord:register": "node --experimental-strip-types scripts/register-discord.mjs"
   },
-  "eslintConfig": {
-    "extends": [
-      "react-app"
-    ]
-  },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "gh-pages": "^6.3.0"
+    "@cloudflare/workers-types": "5.20261019.1",
+    "@eslint/js": "9.39.5",
+    "eslint": "9.39.5",
+    "eslint-plugin-react": "7.37.5",
+    "eslint-plugin-react-hooks": "5.2.0",
+    "globals": "^16.0.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.61.1",
+    "vite": "7.3.7",
+    "wrangler": "4.151.2"
+  },
+  "overrides": {
+    "rollup": "4.64.2"
   }
 }
