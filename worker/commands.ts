@@ -25,6 +25,7 @@ const partyOptions = [
   integer('max_players', 'Maximum group size', 1, 99),
 ]
 const session = { ...string('session', 'Choose a game night', true, 50), autocomplete: true }
+const notes = string('notes', 'Short note about the game, such as where to get it', false, 200)
 const sub = (name: string, description: string, ...options: Option[]): Option =>
   ({ type: 1, name, description, options })
 
@@ -60,14 +61,16 @@ export const gameNightCommand = {
     sub('show', 'Show the current game night, votes, availability and attendance', session),
     sub('nominate', 'Add a custom game or choose a RAWG result',
       session, string('game', 'Name of a custom game', false, 100),
-      integer('rawg_id', 'Game ID from /gamenight search', 1, 2147483647), ...partyOptions),
-    sub('tag', 'Add or update platform, crossplay and player information for a nomination',
-      session, { ...string('game', 'Choose a nominated game', true, 20), autocomplete: true }, ...partyOptions),
+      integer('rawg_id', 'Game ID from /gamenight search', 1, 2147483647), ...partyOptions, notes),
+    sub('tag', 'Update tags and notes on a nominated game',
+      session, { ...string('game', 'Choose a nominated game', true, 20), autocomplete: true }, ...partyOptions,
+      notes, bool('clear_notes', 'Remove the game note')),
     sub('shortlist', 'Filter nominated games and optionally draw a surprise pick',
       session, string('platforms', 'Every needed platform, separated by commas'),
       bool('crossplay', 'Require crossplay'), integer('players', 'Group size to fit', 1, 99),
       bool('surprise', 'Draw one game from the eligible shortlist')),
-    sub('search', 'Search RAWG for games to nominate', string('query', 'Game name', true, 80)),
+    sub('search', 'Look up games in RAWG and optionally nominate one',
+      string('query', 'Game name', true, 80), { ...session, required: false }),
     sub('propose-time', 'Add a time for members to consider',
       session, string('time', 'YYYY-MM-DD HH:MM in session time, or add a UTC offset', true, 30)),
     sub('edit', 'Update game night details or extend/change an open deadline',

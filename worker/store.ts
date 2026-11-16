@@ -38,15 +38,16 @@ function nameKey(name: string) {
 
 export function nomination(
   db: D1Database, id: string, name: string, at: number, gate: string,
-  metadata?: GameTags & { rawg_id?: number | null; image?: string | null },
+  metadata?: Partial<GameTags & Pick<Game, 'rawg_id' | 'image' | 'game_details'>>,
 ) {
   return statement(db, `
-    INSERT INTO games (session_id, name, name_key, rawg_id, image, platforms, crossplay, min_players, max_players)
-    SELECT id, ?, ?, ?, ?, ?, ?, ?, ? FROM sessions WHERE id = ? AND ${acceptsBallots} AND ${gate}
+    INSERT INTO games (session_id, name, name_key, rawg_id, image, platforms, crossplay, min_players, max_players, game_details)
+    SELECT id, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM sessions WHERE id = ? AND ${acceptsBallots} AND ${gate}
     AND (SELECT count(*) FROM games WHERE session_id = sessions.id) < 24
     ON CONFLICT DO NOTHING
   `, name, nameKey(name), metadata?.rawg_id ?? null, metadata?.image ?? null, metadata?.platforms ?? '[]',
-  metadata?.crossplay ?? null, metadata?.min_players ?? null, metadata?.max_players ?? null, id, at)
+  metadata?.crossplay ?? null, metadata?.min_players ?? null, metadata?.max_players ?? null,
+  metadata?.game_details ?? '{}', id, at)
 }
 
 export function addSlot(db: D1Database, id: string, startsAt: number, gate: string, at: number) {
@@ -110,7 +111,7 @@ export function manualSession(
 
 export async function details(db: D1Database, item: Session) {
   const [games, slots, counts, going, queue, event] = await db.batch([
-    statement(db, 'SELECT id, name, image, rawg_id, votes, platforms, crossplay, min_players, max_players FROM game_tally WHERE session_id = ? ORDER BY votes DESC, id', item.id),
+    statement(db, 'SELECT id, name, image, rawg_id, votes, platforms, crossplay, min_players, max_players, game_details FROM game_tally WHERE session_id = ? ORDER BY votes DESC, id', item.id),
     statement(db, 'SELECT starts_at, available FROM slot_tally WHERE session_id = ? ORDER BY starts_at', item.id),
     statement(db, `
       SELECT CASE WHEN needs_reconfirm = 1 THEN 'reconfirm' ELSE response END AS status, count(*) AS total

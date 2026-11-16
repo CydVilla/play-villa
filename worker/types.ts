@@ -63,11 +63,21 @@ export interface GameTags {
   max_players: number | null
 }
 
+export interface GameDetails {
+  platforms?: string[]
+  genres?: string[]
+  released?: string
+  publisher?: string
+  sourceUrl?: string
+  notes?: string
+}
+
 export interface Game extends GameTags {
   id: number
   name: string
   rawg_id: number | null
   image: string | null
+  game_details: string
   votes: number
 }
 
