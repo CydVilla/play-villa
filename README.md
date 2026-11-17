@@ -81,15 +81,15 @@ When the script says it registered `/gamenight`, erase the token value from the 
 
 In your server, select `/gamenight configure` from Discord’s slash-command picker. Set **channel** to your game-night text channel and **timezone** to a city-based time zone such as `America/New_York`. A server manager can also set an organizer role, voice channel, minimum attendance, and reminder timing.
 
-In that channel, use `/gamenight create` to open a clearly labeled test round. Enter a game name, then pick a future **date** and **time**. Try **Vote** and **Available times** on the board. Then use `/gamenight cancel` and select the test round. [Two-account verification](docs/setup.md#verify-a-fresh-installation-with-two-discord-accounts) · [Troubleshooting](docs/setup.md#troubleshooting)
+In that channel, use `/gamenight create` for a clearly labeled test round. Enter a game name, then pick a future **date** and **time**. Review the private preview and choose how to publish. Try **Vote** and **Available times** on the board. Then use `/gamenight cancel` and select the test round. [Two-account verification](docs/setup.md#verify-a-fresh-installation-with-two-discord-accounts) · [Troubleshooting](docs/setup.md#troubleshooting)
 
 ## Run your first game night
 
 | Who | Action |
 | --- | --- |
-| Organizer | Use `/gamenight create` with a game name, then choose **date** and **time** from the suggestions. Type part of a date to find it, or enter a time like `7:30 PM` in the server time zone. When RAWG is enabled, Play Villa looks up the title during creation. Set **catalog** to false to use your own title without a lookup. You can set an RSVP **capacity** or add more times in **alternatives**. |
+| Organizer | Use `/gamenight create` with a game name, then choose **date** and **time**. Type part of a date to find it, or enter a time like `7:30 PM` in the server time zone. Submit to see a private preview, then choose **Publish with RAWG match** or **Publish as typed**. RAWG verification is on by default; set **verify_game** to false to skip the lookup and review the typed title. |
 | Members | Use `/gamenight nominate` with **session** and **game** to add any game by name. Add **notes** for details such as where to get it. If RAWG is enabled, use `/gamenight search` with just a game name when one ballot is open, then pick a result. Choose **session** when several ballots are open. Use **Vote** on the board to vote, switch, or retract. |
-| Members | Use **Available times** to mark every slot you can make. Suggest a new time with `/gamenight propose-time`. Use **Going**, **Maybe**, or **Can’t attend** to RSVP. Availability and RSVP are saved separately. |
+| Members | Use **Available times** to mark every slot you can make. Match the numbers in the dropdown to the times shown in your local time. Suggest a new time with `/gamenight propose-time`. Use **Going**, **Maybe**, or **Can’t attend** to RSVP. |
 | Organizer | Check **View details** for the current counts. Close voting with `/gamenight close` or wait for the deadline. Use `/gamenight confirm` to accept the recommended game and time or choose your own from the poll. |
 | Members | If a confirmed night is full, select **Going** to join its waitlist. Play Villa tags you in the channel when it offers you a seat. Select **Going** again within 30 minutes or before the game starts, whichever comes first. Select **Maybe** or **Can’t attend** to leave the waitlist. |
 | Organizer | Move a confirmed night before it starts with `/gamenight reschedule`. The new board asks attendees to RSVP again, clears the old waitlist, and updates the companion’s calendar export. |

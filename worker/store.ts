@@ -31,6 +31,8 @@ export async function mutate(
 }
 
 export const acceptsBallots = "status = 'open' AND deadline > ?"
+export const cancellable = `status <> 'cancelled' AND CASE WHEN status = 'confirmed' THEN starts_at + duration * 60
+  ELSE (SELECT max(starts_at) FROM slots WHERE session_id = sessions.id) END > ?`
 
 function nameKey(name: string) {
   return name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase()
@@ -103,9 +105,9 @@ export function manualSession(
         timezone, created_at, deadline, duration, reminder, minimum, capacity)
       SELECT ?, id, channel_id, CASE WHEN ? THEN ? ELSE voice_id END, ?, ?, ?, coalesce(?, timezone), ?, ?,
         coalesce(?, duration), coalesce(?, reminder), minimum, ?
-      FROM guilds WHERE id = ? AND ${gate}
+      FROM guilds WHERE id = ? AND channel_id = ? AND timezone = ? AND ${gate}
     `, id, Number(Boolean(prior)), prior?.session.voice_id ?? null, organizer, title, description, prior?.session.timezone ?? null,
-      at, deadline, prior?.session.duration ?? null, prior?.session.reminder ?? null, capacity, settings.id),
+      at, deadline, prior?.session.duration ?? null, prior?.session.reminder ?? null, capacity, settings.id, settings.channel_id, settings.timezone),
     nomination(db, id, title, at, gate, prior?.game ?? game),
     ...starts.map(time => addSlot(db, id, time, gate, at)),
   ]

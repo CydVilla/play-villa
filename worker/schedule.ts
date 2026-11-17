@@ -49,4 +49,9 @@ export async function scheduleRounds(db: D1Database, at: number) {
       SELECT id FROM interaction_receipts WHERE created_at < ? LIMIT 100
     )
   `, at - 86400).run()
+  await statement(db, `
+    DELETE FROM create_drafts WHERE id IN (
+      SELECT id FROM create_drafts WHERE expires_at <= ? ORDER BY expires_at LIMIT 100
+    )
+  `, at).run()
 }
