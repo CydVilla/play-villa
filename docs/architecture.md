@@ -19,7 +19,7 @@ A persistent Gateway process would add an always-on service and connection manag
 
 ## Game lookup
 
-The optional Worker secret `RAWG_API_KEY` enables server-side searches and game lookup by ID. Search and detail requests each have a ten-second per-guild cooldown, so a member can pick a search result immediately. The Worker saves available platform names, genres, release date, publisher, a RAWG page link, and approved RAWG artwork with the nomination. Organizers can update member-supplied game notes while voting is open. The companion API returns the saved details with the existing public channel scope. Older nominations keep their existing fields and have an empty details object after migration. [RAWG setup](setup.md#enable-game-search)
+The optional Worker secret `RAWG_API_KEY` enables server-side searches and game lookup by ID. Search and detail requests each have a ten-second per-guild cooldown, so a member can pick a search result immediately. When a search omits the session, the Worker offers direct nomination only if exactly one ballot in the channel is open. Network failures, timeouts, and upstream 5xx responses get one retry. A failed lookup logs only the upstream status or the transport failure category. The Worker saves available platform names, genres, release date, publisher, a RAWG page link, and approved RAWG artwork with the nomination. Organizers can update member-supplied game notes while voting is open. The companion API returns the saved details with the existing public channel scope. Older nominations keep their existing fields and have an empty details object after migration. [RAWG setup](setup.md#enable-game-search)
 
 ## Delivery
 

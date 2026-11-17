@@ -320,15 +320,25 @@ async function slash(ctx: Context): Promise<ActionResult> {
   if (opts.action === 'create') return create(ctx, settings, opts)
   if (opts.action === 'search') {
     const id = opts.text('session')
-    const item = id ? await scopedSession(ctx, id) : undefined
-    if (item) votingOpen(item, ctx.now)
-    else requiredChannel(ctx, settings)
+    let target: Session | 'none' | 'choose'
+    if (id) {
+      target = await scopedSession(ctx, id)
+      votingOpen(target, ctx.now)
+    } else {
+      requiredChannel(ctx, settings)
+      const open = await rows<Session>(ctx.db,
+        `SELECT * FROM sessions WHERE guild_id = ? AND channel_id = ? AND ${acceptsBallots} LIMIT 2`,
+        ctx.guildId, ctx.channelId, ctx.now)
+      target = open.length === 0 ? 'none' : open.length === 1 ? open[0] : 'choose'
+    }
     const query = checkedLabel(opts.text('query'), 80)
     if (query.length < 2) throw new InputError('Search for at least two characters.')
     await allowRawg(ctx.env, ctx.guildId, ctx.now, 'search')
     const results = await searchRawg(ctx.env, query)
-    return results.length ? { message: rawgResults(results, item) }
-      : reply('No RAWG results found. Use /gamenight nominate with a custom game name.')
+    if (results.length) return { message: rawgResults(results, target) }
+    return reply(target === 'none'
+      ? 'No RAWG results found. An organizer can start a game night with a custom name in `/gamenight create`.'
+      : 'No RAWG results found. Use `/gamenight nominate` with a custom game name.')
   }
   const item = await scopedSession(ctx, opts.text('session'))
   if (opts.action === 'rematch') return rematch(ctx, settings, item, opts)

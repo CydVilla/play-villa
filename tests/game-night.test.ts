@@ -25,9 +25,9 @@ const at = parseTime('2026-11-16 20:00Z', 'UTC')
 const time1 = parseTime('2026-11-20 20:00Z', 'UTC')
 const time2 = parseTime('2026-11-21 21:00Z', 'UTC')
 
-function harness() {
+function harness(config: Omit<Env, 'DB'> = {}) {
   const db = database()
-  const env = { DB: db as unknown as D1Database, DISCORD_APPLICATION_ID: app }
+  const env = { ...config, DB: db as unknown as D1Database, DISCORD_APPLICATION_ID: app }
   let sequence = 0
   const action = async (name: string, fields: Record<string, string | number | boolean> = {},
     settings: { user?: string; admin?: boolean; roles?: string[]; guild?: string; channel?: string; now?: number; id?: string } = {},
@@ -411,6 +411,48 @@ test('manual nominees can carry editable notes without a RAWG key', async () => 
   await h.action('tag', { session: id, game, notes: 'Bring a pencil and dice.' })
   await h.action('confirm', { session: id, game, time: String(time1) })
   assert.match((await h.action('show', { session: id })).message.embeds![0].description!, /pencil and dice/)
+})
+
+test('RAWG search only offers automatic nomination when exactly one ballot is open in the channel', async t => {
+  const h = harness({ RAWG_API_KEY: 'mock-rawg-key' })
+  await h.configure()
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ results: [{ id: 123, name: 'Portal 2' }] }))
+  const search = (now: number) => h.action('search', { query: 'Portal 2' }, { now })
+
+  const none = await search(at)
+  assert.match(none.message.content!, /no open game night.*\/gamenight create/)
+  assert.equal(none.message.components, undefined)
+  const { id } = await h.create()
+  const one = await search(at + 10)
+  assert.match(one.message.content!, /nominate for.*Overcooked/)
+  assert.match(JSON.stringify(one.message.components), new RegExp(`gn:rawg:${id}`))
+  assert.equal(h.one('SELECT count(*) AS n FROM games WHERE rawg_id = 123')?.n, 0)
+  await h.create({ game: 'Another night' })
+  const multiple = await search(at + 20)
+  assert.match(multiple.message.content!, /More than one game night is open/)
+  assert.equal(multiple.message.components, undefined)
+  await h.action('close', { session: id })
+  assert.match((await search(at + 30)).message.content!, /nominate for.*Another night/)
+})
+
+test('RAWG retries a temporary upstream failure once and reports rate limits without retrying them', async t => {
+  const h = harness({ RAWG_API_KEY: 'mock-rawg-key' })
+  await h.configure()
+  let attempts = 0
+  const upstream = t.mock.method(globalThis, 'fetch', async (url: URL) => {
+    if (url.searchParams.get('search') === 'Throttle') return new Response(null, { status: 429 })
+    if (++attempts === 1) return new Response(null, { status: 503 })
+    return Response.json({ results: [{ id: 123, name: 'Portal 2' }] })
+  })
+  const warnings = t.mock.method(console, 'warn', () => undefined)
+  const recovered = await h.action('search', { query: 'Portal 2' })
+  assert.match(recovered.message.embeds![0].description!, /Portal 2/)
+  assert.equal(upstream.mock.callCount(), 2)
+  assert.equal(warnings.mock.callCount(), 0)
+  const throttled = await h.action('search', { query: 'Throttle' }, { now: at + 10 })
+  assert.match(throttled.message.content!, /RAWG is limiting requests/)
+  assert.equal(upstream.mock.callCount(), 3)
+  assert.deepEqual(warnings.mock.calls[0].arguments, ['RAWG lookup failed', 429])
 })
 
 test('a cancelled session cannot send its previously scheduled reminder', async t => {
