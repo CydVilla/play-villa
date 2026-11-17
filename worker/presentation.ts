@@ -95,10 +95,12 @@ export function board(data: Details, at: number, delivery?: Delivery): Message {
   const { item, games, slots, going, rsvps, waiting, eventId } = data
   const selected = games.find(game => game.id === item.game_id)
   const status = item.status === 'open' && at >= item.deadline ? 'closed' : item.status
+  const isBallot = status === 'open' || status === 'closed'
   const proposal = recommend(data, at)
   const suggestedGame = item.status === 'open' ? proposal.game : selected
   const suggestedTime = item.status === 'open' ? proposal.slot?.starts_at : item.starts_at
-  const gameDetails = selected && gameDetailsText(JSON.parse(selected.game_details) as GameDetails)
+  const featuredGame = isBallot ? suggestedGame ?? games[0] : status === 'confirmed' ? selected : undefined
+  const gameDetails = featuredGame && gameDetailsText(JSON.parse(featuredGame.game_details) as GameDetails)
   const highlights = [
     item.description && escapeText(item.description),
     status === 'open' && `**Voting closes** ${timestamp(item.deadline, 'R')}`,
@@ -107,9 +109,10 @@ export function board(data: Details, at: number, delivery?: Delivery): Message {
     delivery?.kind === 'rescheduled' && 'The start time changed. Please RSVP again on this board.',
     status === 'confirmed' && item.starts_at && selected &&
       `**${escapeText(selected.name)}** • ${timestamp(item.starts_at, 'F')}`,
-    status === 'confirmed' && gameDetails,
-    ['open', 'closed'].includes(status) && `**Recommended game** ${suggestedGame ? escapeText(suggestedGame.name) : 'Awaiting votes'}`,
-    ['open', 'closed'].includes(status) && `**Recommended time** ${suggestedTime ? timestamp(suggestedTime) : 'Awaiting availability'}`,
+    isBallot && `**Recommended game** ${suggestedGame ? escapeText(suggestedGame.name) : 'Awaiting votes'}`,
+    isBallot && `**Recommended time** ${suggestedTime ? timestamp(suggestedTime) : 'Awaiting availability'}`,
+    isBallot && featuredGame && gameDetails && `\n**About ${escapeText(featuredGame.name)}**`,
+    gameDetails,
     status === 'confirmed' && (item.voice_id
       ? `[Join voice channel](${channelLink(item.guild_id, item.voice_id)})`
       : `**Meet in** <#${item.channel_id}>`),

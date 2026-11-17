@@ -4,11 +4,12 @@ import worker from '../worker/index.ts'
 import { syncEvents } from '../worker/events.ts'
 import { deliverPending } from '../worker/delivery.ts'
 import { autocomplete, handleInteraction, type Interaction } from '../worker/interactions.ts'
+import { board } from '../worker/presentation.ts'
 import { publicSchedule } from '../worker/public.ts'
 import { scheduleRounds } from '../worker/schedule.ts'
 import { details, recommend, session, statement } from '../worker/store.ts'
 import { canonicalZone, parseTime, parseWeekly, weeklyWindow } from '../worker/time.ts'
-import { nowSeconds, type Env, type Session } from '../worker/types.ts'
+import { nowSeconds, type Delivery, type Env, type Session } from '../worker/types.ts'
 import { calendar } from '../src/calendar.js'
 import { database } from './database.ts'
 
@@ -254,6 +255,14 @@ test('create imports a single matching RAWG title and retains manual creation du
   const picked = await h.create({ game: 'Death Note: Killer Within' })
   assert.match(picked.message.content!, /Publisher\*\* Bandai Namco/)
   assert.equal(h.one('SELECT rawg_id FROM games WHERE session_id = ?', picked.id)?.rawg_id, 992151)
+  const data = await details(h.env.DB, (await h.get(picked.id))!)
+  const opening = await statement(h.env.DB, "SELECT * FROM deliveries WHERE session_id = ? AND kind = 'open'", picked.id).first<Delivery>()
+  assert.ok(opening)
+  const announced = board(data, at, opening).embeds![0].description!
+  assert.match(announced, /Recommended game\*\* Awaiting votes/)
+  assert.match(announced, /About Death Note: Killer Within\*\*\n\*\*Publisher\*\* Bandai Namco/)
+  const liveDetails = await h.click('show', picked.id, member)
+  assert.match(liveDetails.message.embeds![0].description!, /Publisher\*\* Bandai Namco/)
   assert.equal(catalog.mock.callCount(), 2)
   const manual = await h.create({ game: 'Homebrew', catalog: false }, { now: at + 10 })
   assert.match(manual.message.content!, /Game night created/)

@@ -60,7 +60,7 @@ export const gameNightCommand = {
       string('description', 'Details for the group', false, 400),
       integer('capacity', 'Maximum number of Going RSVPs', 1, 99),
       bool('catalog', 'Set false to use your typed game name without RAWG lookup')),
-    sub('show', 'Show the current game night, votes, availability and attendance', session),
+    sub('show', 'Show game details, votes, availability and attendance', session),
     sub('nominate', 'Add a custom game or choose a RAWG result',
       session, string('game', 'Name of a custom game', false, 100),
       integer('rawg_id', 'Game ID from /gamenight search', 1, 2147483647), ...partyOptions, notes),
