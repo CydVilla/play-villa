@@ -210,6 +210,64 @@ test('time conversion handles both DST transitions and explicit UTC offsets', ()
   assert.equal(overlap.slots[0], parseTime('2026-11-01 05:30Z', zone))
 })
 
+test('create suggests selectable dates and times in the server time zone', async () => {
+  const h = harness()
+  await h.action('configure', { channel, timezone: 'America/New_York', organizer_role: role })
+  const complete = (name: 'date' | 'time', value: string, date?: string, memberRoles = [role]) => autocomplete(h.env, {
+    type: 4, application_id: app, guild_id: server, channel_id: channel, token: 'test-token', id: '200000000000000120',
+    member: { user: { id: member }, roles: memberRoles },
+    data: { name: 'gamenight', options: [{ name: 'create', options: [
+      ...(date ? [{ name: 'date', value: date }] : []), { name, value, focused: true },
+    ] }] },
+  }, at)
+  const dates = await complete('date', '')
+  assert.equal(dates.length, 25)
+  assert.match(dates[0].name, /Today · Monday, November 16, 2026/)
+  assert.equal((await complete('date', 'dec 31'))[0].value, '2026-12-31')
+  assert.deepEqual(await complete('date', '', undefined, []), [])
+  const date = dates.find(choice => choice.value === '2026-11-20')!.value
+  assert.deepEqual(await complete('time', '7 pm', date), [{ name: '7:00 PM', value: '19:00' }])
+  assert.deepEqual(await complete('time', '7:30 p', date), [{ name: '7:30 PM', value: '19:30' }])
+  assert.deepEqual(await complete('time', ''), [])
+  assert.deepEqual(await complete('time', '1 pm', '2026-11-16'), [])
+  const created = await h.action('create', { game: 'Portal 2', date, time: '7:30 PM' }, { user: member, admin: false, roles: [role] })
+  assert.match(created.message.content!, /Game night created/)
+  assert.equal(h.one('SELECT starts_at FROM slots WHERE session_id = ?', created.id)?.starts_at,
+    parseTime('2026-11-21 00:30Z', 'UTC'))
+})
+
+test('create imports a single matching RAWG title and retains manual creation during failures and ambiguity', async t => {
+  const h = harness({ RAWG_API_KEY: 'mock-rawg-key' })
+  await h.configure()
+  const fixture = { id: 992151, name: 'DEATH NOTE Killer Within', slug: 'death-note-killer-within' }
+  const catalog = t.mock.method(globalThis, 'fetch', async (url: URL) => {
+    assert.equal(url.origin, 'https://api.rawg.io')
+    if (url.pathname.endsWith('/992151')) return Response.json({ ...fixture, publishers: [{ name: 'Bandai Namco' }] })
+    const query = url.searchParams.get('search')
+    if (query === 'Homebrew') return new Response(null, { status: 503 })
+    if (query === 'Doom') return Response.json({ results: [{ id: 1, name: 'Doom' }, { id: 2, name: 'DOOM' }] })
+    assert.equal(query, 'Death Note: Killer Within')
+    return Response.json({ results: [fixture, { id: 7, name: 'Death Note: Successor' }] })
+  })
+  t.mock.method(console, 'warn', () => undefined)
+
+  const picked = await h.create({ game: 'Death Note: Killer Within' })
+  assert.match(picked.message.content!, /Publisher\*\* Bandai Namco/)
+  assert.equal(h.one('SELECT rawg_id FROM games WHERE session_id = ?', picked.id)?.rawg_id, 992151)
+  assert.equal(catalog.mock.callCount(), 2)
+  const manual = await h.create({ game: 'Homebrew', catalog: false }, { now: at + 10 })
+  assert.match(manual.message.content!, /Game night created/)
+  assert.equal(h.one('SELECT rawg_id FROM games WHERE session_id = ?', manual.id)?.rawg_id, null)
+  assert.equal(catalog.mock.callCount(), 2)
+  const unavailable = await h.create({ game: 'Homebrew' }, { now: at + 10 })
+  assert.match(unavailable.message.content!, /Used the game name you entered/)
+  assert.equal(h.one('SELECT rawg_id FROM games WHERE session_id = ?', unavailable.id)?.rawg_id, null)
+  const ambiguous = await h.create({ game: 'Doom' }, { now: at + 20 })
+  assert.match(ambiguous.message.content!, /Game night created/)
+  assert.equal(h.one('SELECT rawg_id FROM games WHERE session_id = ?', ambiguous.id)?.rawg_id, null)
+  assert.equal(catalog.mock.callCount(), 5)
+})
+
 test('guild and channel scope gate writes, details, autocomplete and public data', async () => {
   const h = harness()
   await h.configure()
