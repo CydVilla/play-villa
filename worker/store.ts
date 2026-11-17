@@ -36,9 +36,11 @@ function nameKey(name: string) {
   return name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase()
 }
 
+type NominationMetadata = Partial<GameTags & Pick<Game, 'rawg_id' | 'image' | 'game_details'>>
+
 export function nomination(
   db: D1Database, id: string, name: string, at: number, gate: string,
-  metadata?: Partial<GameTags & Pick<Game, 'rawg_id' | 'image' | 'game_details'>>,
+  metadata?: NominationMetadata,
 ) {
   return statement(db, `
     INSERT INTO games (session_id, name, name_key, rawg_id, image, platforms, crossplay, min_players, max_players, game_details)
@@ -93,7 +95,7 @@ export function availability(db: D1Database, id: string, user: string, selected:
 export function manualSession(
   db: D1Database, settings: Guild, id: string, organizer: string, title: string, description: string,
   starts: number[], deadline: number, capacity: number | null, at: number, gate: string,
-  prior?: { session: Session; game: Game },
+  { prior, game }: { prior?: { session: Session; game: Game }; game?: NominationMetadata } = {},
 ) {
   return [
     statement(db, `
@@ -104,7 +106,7 @@ export function manualSession(
       FROM guilds WHERE id = ? AND ${gate}
     `, id, Number(Boolean(prior)), prior?.session.voice_id ?? null, organizer, title, description, prior?.session.timezone ?? null,
       at, deadline, prior?.session.duration ?? null, prior?.session.reminder ?? null, capacity, settings.id),
-    nomination(db, id, title, at, gate, prior?.game),
+    nomination(db, id, title, at, gate, prior?.game ?? game),
     ...starts.map(time => addSlot(db, id, time, gate, at)),
   ]
 }

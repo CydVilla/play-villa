@@ -2,12 +2,12 @@ import { attendance, offerSpots, reschedule } from './attendance.ts'
 import { parsePlatforms, shortlist } from './party.ts'
 import { escapeText, timestamp, type Message } from './discord-api.ts'
 import { board, gameDetailsText, rawgResults, timeMenu, voteMenu } from './presentation.ts'
-import { allowRawg, rawgGame, searchRawg } from './rawg.ts'
+import { allowRawg, matchRawgByName, rawgGame, searchRawg } from './rawg.ts'
 import {
   acceptsBallots, addSlot, availability, checkedLabel, close, confirm, details, guild, manualSession,
   mutate, nomination, rows, session, statement, vote,
 } from './store.ts'
-import { canonicalZone, parseFuture, parseWeekly, weeklyWindow } from './time.ts'
+import { canonicalZone, dateChoices, parseFuture, parseStart, parseWeekly, timeChoices, weeklyWindow } from './time.ts'
 import { InputError, snowflake, type Env, type Game, type GameTags, type Guild, type RSVP, type Session, type Weekly } from './types.ts'
 
 interface Option {
@@ -189,21 +189,29 @@ async function weekly(ctx: Context, settings: Guild, opts: Options) {
 async function create(ctx: Context, settings: Guild, opts: Options, prior?: { session: Session; game: Game }) {
   requiredChannel(ctx, settings)
   if (!ctx.admin && !fromRole(ctx, settings)) throw new InputError('Creating game nights requires Manage Server or the organizer role.')
-  const game = prior?.game.name ?? checkedLabel(opts.text('game'), 100)
+  const title = prior?.game.name ?? checkedLabel(opts.text('game'), 100)
   const description = prior?.session.description ?? (opts.text('description') ? checkedLabel(opts.text('description'), 400) : '')
   const zone = prior?.session.timezone ?? settings.timezone
-  const proposed = [opts.text('time'), ...opts.text('alternatives').split(',').filter(value => value.trim())]
-  const slots = [...new Set(proposed.map(time => parseFuture(time, zone, ctx.now)))].sort((a, b) => a - b)
+  const start = parseStart(opts.text('date'), opts.text('time'), zone, ctx.now)
+  const alternatives = opts.text('alternatives').split(',').filter(value => value.trim())
+  const slots = [...new Set([start, ...alternatives.map(time => parseFuture(time, zone, ctx.now))])].sort((a, b) => a - b)
   if (slots.length > 10) throw new InputError('Choose at most ten time slots.')
   const deadline = opts.text('deadline') ? parseFuture(opts.text('deadline'), zone, ctx.now)
     : Math.min(slots[0] - 60, ctx.now + 3 * 86400)
   if (deadline <= ctx.now || deadline >= slots[0]) throw new InputError('Set a future voting deadline before the first slot.')
   const id = ctx.interaction.id
   const capacity = prior?.session.capacity ?? opts.number('capacity', 1, 99)
+  const lookup = !prior && Boolean(ctx.env.RAWG_API_KEY) && opts.values.get('catalog') !== false
+  const catalog = lookup ? await matchRawgByName(ctx.env, ctx.guildId, ctx.now, title) : null
+  const game = catalog ? { rawg_id: catalog.id, image: catalog.image, game_details: JSON.stringify(catalog.details) } : undefined
   const result = await mutate(ctx.db, id, ctx.now, gate =>
-    manualSession(ctx.db, settings, id, ctx.user, game, description, slots, deadline, capacity, ctx.now, gate, prior))
-  return reply(result ? `${prior ? 'Rematch poll' : 'Game night'} created. Voting closes ${timestamp(deadline)}. The channel announcement is queued.`
-    : 'This request was already handled.', id)
+    manualSession(ctx.db, settings, id, ctx.user, title, description, slots, deadline, capacity, ctx.now, gate, { prior, game }))
+  if (!result) return reply('This request was already handled.', id)
+  const message = `${prior ? 'Rematch poll' : 'Game night'} created. Voting closes ${timestamp(deadline)}. The channel announcement is queued.`
+  const info = catalog ? gameDetailsText(catalog.details)
+    : lookup ? 'Used the game name you entered. Use `/gamenight search` to browse RAWG matches.' : ''
+  const attribution = catalog && !catalog.details.sourceUrl ? '\n[Game data by RAWG](https://rawg.io/)' : ''
+  return reply(`${message}${info ? `\n${info}` : ''}${attribution}`, id)
 }
 
 async function edit(ctx: Context, item: Session, opts: Options) {
@@ -481,6 +489,12 @@ export async function autocomplete(env: Env, interaction: Interaction, now: numb
   if (!focus || typeof focus.value !== 'string') return []
   const query = focus.value.trim().toLowerCase()
   const filter = (name: string, value: string) => name.toLowerCase().includes(query) || value.startsWith(query)
+  if (command?.name === 'create' && (focus.name === 'date' || focus.name === 'time')) {
+    const settings = await guild(ctx.db, ctx.guildId)
+    if (!settings || ctx.channelId !== settings.channel_id || (!ctx.admin && !fromRole(ctx, settings))) return []
+    return focus.name === 'date' ? dateChoices(query, settings.timezone, now)
+      : timeChoices(options(interaction).text('date'), query, settings.timezone, now)
+  }
   if (focus.name === 'session') {
     const rematches = command?.name === 'rematch'
     const searching = command?.name === 'search'

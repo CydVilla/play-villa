@@ -8,7 +8,7 @@ A persistent Gateway process would add an always-on service and connection manag
 
 ## Scheduling and ballots
 
-- Manual dates use the session time zone unless the input includes `Z` or a numeric UTC offset. Enter an explicit offset during repeated or skipped local times. Weekly rules advance skipped times by the clock change and take the earlier occurrence of repeated times.
+- Creation date and time suggestions use the configured server time zone and show future choices within 90 days. Discord caps each set of suggestions at 25, so type part of a later date to find it. Manually entered dates use the relevant session or server time zone. Explicit offsets resolve repeated or skipped local times. Weekly rules advance skipped times by the clock change and take the earlier occurrence of repeated times.
 - Manual voting defaults to three days after creation or one minute before the earliest proposed slot, whichever comes first. A custom deadline must precede all slots. Weekly rounds open and close on the configured local days and times. If cron misses an entire planning window, it skips that round.
 - The vote winner has the most votes, with the earliest nomination winning ties. The time winner has the most availability among future slots, with the earliest start winning ties. Users who RSVP **Can’t attend** do not count toward slot recommendations until they change that RSVP. Choosing availability is separate from an RSVP. Capacity limits **Going** responses and active seat offers. Availability does not reserve a seat.
 - An organizer can confirm a nominated game and proposed future time even when a ballot has no recommendation, by choosing both in Discord. Automatic confirmation requires a game vote and availability at or above the quorum. Below quorum, the round closes and waits for a decision.
@@ -20,6 +20,8 @@ A persistent Gateway process would add an always-on service and connection manag
 ## Game lookup
 
 The optional Worker secret `RAWG_API_KEY` enables server-side searches and game lookup by ID. Search and detail requests each have a ten-second per-guild cooldown, so a member can pick a search result immediately. When a search omits the session, the Worker offers direct nomination only if exactly one ballot in the channel is open. Network failures, timeouts, and upstream 5xx responses get one retry. A failed lookup logs only the upstream status or the transport failure category. The Worker saves available platform names, genres, release date, publisher, a RAWG page link, and approved RAWG artwork with the nomination. Organizers can update member-supplied game notes while voting is open. The companion API returns the saved details with the existing public channel scope. Older nominations keep their existing fields and have an empty details object after migration. [RAWG setup](setup.md#enable-game-search)
+
+Creation searches RAWG once the organizer submits the command. If one result matches the typed title after case and punctuation normalization, Play Villa saves its available details with the first nomination. A blocked or unavailable lookup and ambiguous results fall back to the typed title. The `catalog` option can disable the lookup for an individual game night.
 
 ## Delivery
 

@@ -5,6 +5,11 @@ const weekMinutes = 7 * dayMinutes
 const daySeconds = dayMinutes * 60
 const weekdays = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 const formatters = new Map<string, Intl.DateTimeFormat>()
+const calendarDate = /^\d{4}-\d{2}-\d{2}$/
+const dateLabel = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'UTC', weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+})
+const clockLabel = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', hour: 'numeric', minute: '2-digit' })
 
 function formatter(zone: string) {
   let result = formatters.get(zone)
@@ -53,7 +58,7 @@ function resolveLocal(wall: number, zone: string, recurring: boolean) {
 
 export function parseTime(value: string, zone: string) {
   const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(Z|[+-]\d{2}:\d{2})?$/.exec(value.trim())
-  if (!match) throw new InputError('Enter a time as YYYY-MM-DD HH:MM or use an ISO time with Z or a UTC offset.')
+  if (!match) throw new InputError('Enter the date and 24-hour time, like 2026-11-21 19:30, in the server time zone.')
   const [, year, month, day, hour, minute, offset] = match
   const epoch = Date.UTC(+year, +month - 1, +day, +hour, +minute) / 1000
   if (new Date(epoch * 1000).toISOString().slice(0, 16) !== `${year}-${month}-${day}T${hour}:${minute}`) {
@@ -71,6 +76,59 @@ export function parseFuture(value: string, zone: string, now: number) {
   const epoch = parseTime(value, zone)
   if (epoch <= now || epoch > now + 90 * daySeconds) throw new InputError('Choose a future time within 90 days.')
   return epoch
+}
+
+export function parseStart(date: string, time: string, zone: string, now: number) {
+  if (!date) return parseFuture(time, zone, now)
+  if (!calendarDate.test(date)) throw new InputError('Choose a date from the date dropdown.')
+  const match = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(Z|[+-]\d{2}:\d{2})?$/i.exec(time)
+  if (!match) throw new InputError('Choose a time from the list or type one like 7:30 PM.')
+  const [, hours, minutes = '00', period, offset = ''] = match
+  let hour = Number(hours)
+  if (period) {
+    if (hour < 1 || hour > 12) throw new InputError('Use a 12-hour time like 7:30 PM.')
+    hour = hour % 12 + (period.toLowerCase() === 'pm' ? 12 : 0)
+  }
+  return parseFuture(`${date} ${String(hour).padStart(2, '0')}:${minutes}${offset.toUpperCase()}`, zone, now)
+}
+
+export function dateChoices(query: string, zone: string, now: number) {
+  const localDay = (at: number) => Math.floor(localSeconds(at, zone) / daySeconds) * daySeconds
+  const today = localDay(now)
+  const end = localDay(now + 90 * daySeconds)
+  const terms = query.split(/\s+/)
+  const choices = []
+  for (let day = localDay(now + 61); day <= end && choices.length < 25; day += daySeconds) {
+    const date = new Date(day * 1000)
+    const value = date.toISOString().slice(0, 10)
+    const relative = day === today ? 'Today · ' : day === today + daySeconds ? 'Tomorrow · ' : ''
+    const name = relative + dateLabel.format(date)
+    const text = name.toLowerCase()
+    if (terms.every(term => text.includes(term)) || value.startsWith(query)) choices.push({ name, value })
+  }
+  return choices
+}
+
+export function timeChoices(date: string, query: string, zone: string, now: number) {
+  if (!calendarDate.test(date)) return []
+  const typed = query.replace(/\s/g, '')
+  const choices = []
+  const step = typed ? 30 : 60
+  for (let minute = 0; minute < dayMinutes && choices.length < 25; minute += step) {
+    const hours = String(Math.floor(minute / 60)).padStart(2, '0')
+    const minutes = String(minute % 60).padStart(2, '0')
+    const value = `${hours}:${minutes}`
+    const name = clockLabel.format(minute * 60_000)
+    const text = name.toLowerCase().replace(/\s/g, '')
+    if (![text, text.replace(':00', ''), value].some(label => label.startsWith(typed))) continue
+    try {
+      parseFuture(`${date} ${value}`, zone, now + 60)
+      choices.push({ name, value })
+    } catch (error) {
+      if (!(error instanceof InputError)) throw error
+    }
+  }
+  return choices
 }
 
 function weeklyMinute(value: string) {

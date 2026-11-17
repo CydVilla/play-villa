@@ -99,3 +99,28 @@ export async function rawgGame(env: Env, id: number) {
   if (!game || game.id !== id) throw new InputError('RAWG did not return that game. Use /gamenight nominate with a custom name if needed.')
   return game
 }
+
+export async function matchRawgByName(env: Env, guildId: string, at: number, title: string) {
+  if (!env.RAWG_API_KEY) return null
+  const key = (name: string) => name.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+  const wanted = key(title)
+  if (wanted.length < 2) return null
+  let results
+  try {
+    await allowRawg(env, guildId, at, 'search')
+    results = await searchRawg(env, title)
+  } catch (error) {
+    if (error instanceof InputError) return null
+    throw error
+  }
+  const matches = results.filter(game => key(game.name) === wanted)
+  if (matches.length !== 1) return null
+  const [matched] = matches
+  try {
+    await allowRawg(env, guildId, at, 'details')
+    return await rawgGame(env, matched.id)
+  } catch (error) {
+    if (error instanceof InputError) return matched
+    throw error
+  }
+}
