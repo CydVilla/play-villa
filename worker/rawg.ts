@@ -20,14 +20,24 @@ async function request(env: Env, path: string, query?: string) {
     url.searchParams.set('search', query)
     url.searchParams.set('page_size', '6')
   }
-  try {
-    const response = await fetch(url, { signal: AbortSignal.timeout(3500), redirect: 'manual' })
-    if (!response.ok) throw new Error()
-    return response
-  } catch {
-    // Upstream errors can contain a URL with the API key.
-    throw new InputError('RAWG is unavailable. Try another search later, or nominate a custom game.')
+  let failure: number | 'timeout' | 'network' = 'network'
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(3500), redirect: 'manual' })
+      if (response.ok) return response
+      failure = response.status
+      await response.body?.cancel().catch(() => undefined)
+      if (response.status < 500) break
+    } catch (error) {
+      failure = error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'network'
+    }
   }
+  // Upstream errors and request URLs may contain the API key.
+  console.warn('RAWG lookup failed', failure)
+  if (failure === 429) {
+    throw new InputError('RAWG is limiting requests. Try again later, or nominate a custom game.')
+  }
+  throw new InputError('RAWG is unavailable right now. Try again later, or nominate a custom game.')
 }
 
 export async function allowRawg(env: Env, guildId: string, at: number, purpose: 'search' | 'details') {

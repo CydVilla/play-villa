@@ -19,7 +19,7 @@ export function gameDetailsText(details: GameDetails) {
   ].filter(Boolean).join('\n')
 }
 
-export function rawgResults(games: { id: number; name: string; details: GameDetails }[], item?: Session): Message {
+export function rawgResults(games: { id: number; name: string; details: GameDetails }[], target: Session | 'none' | 'choose'): Message {
   const preview = (details: GameDetails) =>
     [details.platforms?.join(', '), details.genres?.join(', '), details.released].filter(Boolean).join(' · ')
   const results = games.map(game => {
@@ -27,9 +27,12 @@ export function rawgResults(games: { id: number; name: string; details: GameDeta
     const source = game.details.sourceUrl ? ` · [RAWG page](${game.details.sourceUrl})` : ''
     return `**${escapeText(game.name)}** · ID \`${game.id}\`${source}${summary ? `\n${escapeText(label(summary, 120))}` : ''}`
   })
+  const item = typeof target === 'object' ? target : null
+  const instructions = item ? `Choose a result to nominate for **${escapeText(item.title)}**.`
+    : target === 'none' ? 'There’s no open game night in this channel. An organizer can start one with `/gamenight create`.'
+    : 'More than one game night is open. Choose a **session** when you search, or use a result ID with `/gamenight nominate`.'
   return {
-    content: item ? 'Choose a result below to nominate it. [Game data by RAWG](https://rawg.io/)'
-      : 'Use a result ID with `/gamenight nominate`, or choose a session when you search. [Game data by RAWG](https://rawg.io/)',
+    content: `${instructions} [Game data by RAWG](https://rawg.io/)`,
     embeds: [{ description: results.join('\n\n') }],
     components: item ? [row({
       type: 3, custom_id: key('rawg', item), placeholder: 'Choose a game to nominate',

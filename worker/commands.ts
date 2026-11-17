@@ -70,7 +70,7 @@ export const gameNightCommand = {
       bool('crossplay', 'Require crossplay'), integer('players', 'Group size to fit', 1, 99),
       bool('surprise', 'Draw one game from the eligible shortlist')),
     sub('search', 'Look up games in RAWG and optionally nominate one',
-      string('query', 'Game name', true, 80), { ...session, required: false }),
+      string('query', 'Game name', true, 80), { ...session, required: false, description: 'Choose a game night when more than one is open' }),
     sub('propose-time', 'Add a time for members to consider',
       session, string('time', 'YYYY-MM-DD HH:MM in session time, or add a UTC offset', true, 30)),
     sub('edit', 'Update game night details or extend/change an open deadline',
