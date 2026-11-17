@@ -1,5 +1,5 @@
 import { statement } from './store.ts'
-import { InputError, type Env, type GameDetails } from './types.ts'
+import { InputError, type CatalogGame, type Env, type GameDetails } from './types.ts'
 
 interface RawgGame {
   id: number
@@ -60,7 +60,7 @@ function labels<T>(items: T[] | undefined, getName: (entry: T) => unknown, count
   return [...new Set(items.map(item => clean(getName(item), maxLength)).filter(Boolean))].slice(0, count)
 }
 
-function pick(candidate: unknown) {
+function pick(candidate: unknown): CatalogGame | null {
   if (!candidate || typeof candidate !== 'object') return null
   const game = candidate as RawgGame
   const name = clean(game.name, 100)

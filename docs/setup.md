@@ -13,9 +13,11 @@ npx wrangler d1 migrations apply DB --remote --config wrangler.local.toml
 npx wrangler deploy --config wrangler.local.toml
 ```
 
-Register the updated slash command with `npm run discord:register`. For an existing global install, use `npm run discord:register -- --global`. Provide the Discord application credentials temporarily using the [README’s registration steps](../README.md#5-store-the-token-and-register-the-command) or a local secret manager. The deployed Worker continues to use its existing secrets. The migrations preserve existing polls, votes, RSVPs, and delivery records. RAWG details are saved when a new catalog nomination is added. You can keep using old boards until the corresponding game night is rescheduled.
+Register the updated slash command with `npm run discord:register`. For an existing global install, use `npm run discord:register -- --global`. Provide the Discord application credentials temporarily using the [README’s registration steps](../README.md#5-store-the-token-and-register-the-command) or a local secret manager. The deployed Worker continues to use its existing secrets. The migrations preserve existing polls, votes, RSVPs, and delivery records. RAWG details are saved when a new RAWG nomination is added. You can keep using old boards until the corresponding game night is rescheduled.
 
 The `/gamenight create` date and time dropdowns appear after registering the updated command. The creation improvements use the existing schema from migration `0003_game_details.sql`.
+
+The private creation preview uses `0004_create_drafts.sql`. Apply it, deploy the Worker, then register the updated command so Discord shows the **verify_game** option.
 
 ## Enable Discord Events
 
@@ -53,7 +55,7 @@ In the game-night channel, run `/gamenight search` with a game name in **query**
 
 For a game missing from RAWG, or for a server without a key, use `/gamenight nominate` with **session**, **game**, and optional **notes**. Organizers can use `/gamenight tag` with **notes** or **clear_notes** while voting is open.
 
-`/gamenight create` also looks up the **game** you typed. It saves RAWG details when a single catalog title matches. The typed title still opens the ballot when lookup is unavailable or the catalog has multiple matches. Set **catalog** to false to skip lookup for a custom title.
+`/gamenight create` opens a private preview with the proposed dates, voting deadline and any single RAWG match. Choose **Publish with RAWG match** to use its title and details, **Publish as typed** to use your own title, or **Discard preview** to start over. A preview expires within 15 minutes. RAWG verification is on by default; set **verify_game** to false to skip lookup while retaining the private review.
 
 ## Optional GitHub Pages companion
 
@@ -65,7 +67,7 @@ For a shared installation, remove `DISCORD_GUILD_ID` from both `wrangler.local.t
 
 ## Verify a fresh installation with two Discord accounts
 
-1. As a server manager, configure a test text channel. Create a session by selecting a future **date** and **time** and entering an alternate slot. If RAWG is enabled, type a catalog game name and verify its game details appear on the opening board and in **View details**. Confirm it receives one board and the companion shows the same session if public access is enabled.
+1. As a server manager, configure a test text channel. Select a future **date** and **time** and enter an alternate slot. If RAWG is enabled, enter an exact game title and verify the private preview shows the match and time. Publish it and verify one board with game details, then check **View details** and the companion if enabled.
 2. As a member, nominate a custom game with a note. If RAWG is enabled and this is the only open ballot, search with just the game name, pick a result, and check the details in the reply. Vote, switch votes, retract, and vote again. Select both times and change the selection to one. Cycle through RSVP statuses and check **View details**.
 3. Check that the member cannot cancel or confirm. As the organizer, close voting, check the recommendations, and confirm with or without an override. Verify one confirmation with the saved game details, the voice link if set, and the game details and calendar export on the companion if enabled.
 4. With **capacity** set to 1, have the first account select Going and the second join the waitlist. Free the seat with Maybe. Verify the second account is tagged for the offer and can claim it. Move the night with `/gamenight reschedule`. Check that the new board asks for an RSVP and, when the companion is enabled, the calendar export uses the new time.
@@ -84,5 +86,6 @@ For a shared installation, remove `DISCORD_GUILD_ID` from both `wrangler.local.t
 | A confirmed night has no Discord Event | Check **discord_events**, the bot’s **Create Events** permission, and the event entry in `/gamenight delivery-status`. |
 | Game search is disabled or has no result | Check that `RAWG_API_KEY` is a secret on the intended Worker. Try another spelling or nominate the game manually. The **session** picker lists only open ballots in the channel. |
 | RAWG is unavailable or limiting requests | Try another search later or enter the game name manually. If this persists, check the Worker logs for the upstream HTTP status or a timeout. |
+| An old ballot appears after deleting its Discord post | Use `/gamenight cancel` to cancel the saved ballot while it is still upcoming or in progress. |
 | The site opens without a schedule | Check the [public schedule settings](#publish-the-companion-site). An API response of 404 is expected when public access is disabled. For Pages, check both `VITE_API_URL` on the site and `WEB_ORIGIN` on the Worker. |
 | A date is rejected | In `/gamenight create`, choose **date** before **time**. For a later date, type part of the month and day. Enter alternate slots and deadlines as `YYYY-MM-DD HH:MM` in the server time zone. Include a UTC offset for a repeated or skipped local hour. |

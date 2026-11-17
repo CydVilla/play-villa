@@ -72,6 +72,23 @@ export interface GameDetails {
   notes?: string
 }
 
+export interface CatalogGame {
+  id: number
+  name: string
+  image: string | null
+  details: GameDetails
+}
+
+export interface CreateDraft {
+  title: string
+  description: string
+  timezone: string
+  slots: number[]
+  deadline: number
+  capacity: number | null
+  catalog: CatalogGame | null
+}
+
 export interface Game extends GameTags {
   id: number
   name: string

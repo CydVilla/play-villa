@@ -30,8 +30,9 @@ function harness(config: Omit<Env, 'DB'> = {}) {
   const db = database()
   const env = { ...config, DB: db as unknown as D1Database, DISCORD_APPLICATION_ID: app }
   let sequence = 0
+  type ActionSettings = { user?: string; admin?: boolean; roles?: string[]; guild?: string; channel?: string; now?: number; id?: string }
   const action = async (name: string, fields: Record<string, string | number | boolean> = {},
-    settings: { user?: string; admin?: boolean; roles?: string[]; guild?: string; channel?: string; now?: number; id?: string } = {},
+    settings: ActionSettings = {},
     kind = 2, values?: string[]) => {
     const id = settings.id ?? String(200000000000000000n + BigInt(++sequence))
     const data = {
@@ -48,9 +49,18 @@ function harness(config: Omit<Env, 'DB'> = {}) {
   }
   const one = (sql: string, ...params: (string | number)[]) => db.sqlite.prepare(sql).get(...params)
   const configure = () => action('configure', { channel, timezone: 'UTC', organizer_role: role, reminder: 60 })
-  const create = (fields = {}, settings = {}) => action('create', {
-    game: 'Overcooked', time: '2026-11-20 20:00Z', alternatives: '2026-11-21 21:00Z', ...fields,
-  }, settings)
+  const create = async (fields: Record<string, string | number | boolean> = {}, settings: ActionSettings & { preview?: boolean } = {}) => {
+    const { preview, ...actionSettings } = settings
+    const created = await action('create', {
+      game: 'Overcooked', time: '2026-11-20 20:00Z', alternatives: '2026-11-21 21:00Z', ...fields,
+    }, actionSettings)
+    if (preview || !created.message.components?.length) return created
+    const published = await click('publish-typed', created.id, actionSettings.user ?? organizer, undefined, {
+      user: actionSettings.user, admin: actionSettings.admin, roles: actionSettings.roles,
+      guild: actionSettings.guild, channel: actionSettings.channel, now: actionSettings.now,
+    })
+    return { ...published, id: created.id }
+  }
   const click = (name: string, id: string, user: string, values?: string[], settings = {}) =>
     action(`gn:${name}:${id}`, {}, { user, admin: false, ...settings }, 3, values)
   const get = (id: string) => session(env.DB, server, id)
@@ -65,10 +75,14 @@ test('migration applies with foreign keys enforced and create is authorized, ato
   assert.match((await h.create({}, { user: member, admin: false })).message.content!, /organizer role/)
   const id = '200000000000000099'
   const results = await Promise.all([
-    h.create({}, { id, user: member, admin: false, roles: [role] }),
-    h.create({}, { id, user: member, admin: false, roles: [role] }),
+    h.action('create', { game: 'Overcooked', time: '2026-11-20 20:00Z', alternatives: '2026-11-21 21:00Z' },
+      { id, user: member, admin: false, roles: [role] }),
+    h.action('create', { game: 'Overcooked', time: '2026-11-20 20:00Z', alternatives: '2026-11-21 21:00Z' },
+      { id, user: member, admin: false, roles: [role] }),
   ])
-  assert.equal(results.filter(result => result.message.content?.includes('already handled')).length, 1)
+  assert.equal(results.filter(result => result.message.components?.length).length, 2)
+  assert.equal(h.one('SELECT count(*) AS n FROM create_drafts')?.n, 1)
+  assert.match((await h.click('publish-typed', id, member, undefined, { admin: false, roles: [role] })).message.content!, /ready for voting/)
   assert.equal(h.one('SELECT count(*) AS n FROM sessions')?.n, 1)
   assert.equal(h.one('SELECT count(*) AS n FROM games')?.n, 1)
   assert.equal(h.one('SELECT count(*) AS n FROM slots')?.n, 2)
@@ -107,6 +121,8 @@ test('availability is replaceable, invalid slots preserve the ballot, and RSVP l
   const { id } = await h.create({ capacity: 1 })
   const menu = await h.click('time-menu', id, member)
   assert.match(JSON.stringify(menu.message), /"max_values":2/)
+  assert.match(menu.message.content!, new RegExp(`your local time[\\s\\S]*1\\. <t:${time1}:F>[\\s\\S]*2\\. <t:${time2}:F>`))
+  assert.match(JSON.stringify(menu.message.components), /"label":"1\. Fri/)
   await h.click('times', id, member, [String(time1), String(time2)])
   assert.equal(h.one('SELECT count(*) AS n FROM availability')?.n, 2)
   await h.click('times', id, member, [String(time2), '1234'])
@@ -144,9 +160,17 @@ test('recommendations use deterministic ties; organizers can override, edit and 
   assert.equal((await h.get(id))?.game_id, 2)
   assert.equal((await h.get(id))?.starts_at, time2)
   assert.equal(h.one("SELECT due_at FROM deliveries WHERE kind = 'reminder'")?.due_at, time2 - 3600)
+  const cancelChoices = (now: number) => autocomplete(h.env, {
+    type: 4, id, application_id: app, guild_id: server, channel_id: channel, token: 'test-token',
+    member: { user: { id: organizer }, permissions: '32' },
+    data: { name: 'gamenight', options: [{ name: 'cancel', options: [{ name: 'session', value: '', focused: true }] }] },
+  }, now)
+  assert.deepEqual((await cancelChoices(at)).map(choice => choice.value), [id])
+  assert.deepEqual(await cancelChoices(time2 + 7200), [])
   await h.click('going', id, member)
   assert.equal(h.one("SELECT count(*) AS n FROM rsvps WHERE response = 'going'")?.n, 1)
   await h.action('cancel', { session: id })
+  assert.deepEqual(await cancelChoices(at), [])
   await h.click('declined', id, member)
   assert.equal((await h.get(id))?.status, 'cancelled')
   assert.equal(h.one('SELECT response FROM rsvps WHERE user_id = ?', member)?.response, 'going')
@@ -232,12 +256,13 @@ test('create suggests selectable dates and times in the server time zone', async
   assert.deepEqual(await complete('time', ''), [])
   assert.deepEqual(await complete('time', '1 pm', '2026-11-16'), [])
   const created = await h.action('create', { game: 'Portal 2', date, time: '7:30 PM' }, { user: member, admin: false, roles: [role] })
-  assert.match(created.message.content!, /Game night created/)
+  assert.match(created.message.content!, /Review the game and time/)
+  assert.match((await h.click('publish-typed', created.id, member, undefined, { admin: false, roles: [role] })).message.content!, /ready for voting/)
   assert.equal(h.one('SELECT starts_at FROM slots WHERE session_id = ?', created.id)?.starts_at,
     parseTime('2026-11-21 00:30Z', 'UTC'))
 })
 
-test('create imports a single matching RAWG title and retains manual creation during failures and ambiguity', async t => {
+test('create previews a RAWG match privately and publishes it once after the owner confirms', async t => {
   const h = harness({ RAWG_API_KEY: 'mock-rawg-key' })
   await h.configure()
   const fixture = { id: 992151, name: 'DEATH NOTE Killer Within', slug: 'death-note-killer-within' }
@@ -252,29 +277,68 @@ test('create imports a single matching RAWG title and retains manual creation du
   })
   t.mock.method(console, 'warn', () => undefined)
 
-  const picked = await h.create({ game: 'Death Note: Killer Within' })
-  assert.match(picked.message.content!, /Publisher\*\* Bandai Namco/)
+  const picked = await h.create({ game: 'Death Note: Killer Within' }, { preview: true })
+  assert.match(picked.message.embeds![0].description!, /Publisher\*\* Bandai Namco/)
+  assert.match(picked.message.embeds![0].description!, new RegExp(`<t:${time1}:F>`))
+  assert.match(picked.message.embeds![0].description!, /Seats\*\* No limit/)
+  assert.match(JSON.stringify(picked.message.components), /Publish with RAWG match/)
+  assert.equal(picked.notify, undefined)
+  assert.equal(await h.get(picked.id), null)
+  assert.equal(h.one('SELECT count(*) AS n FROM deliveries')?.n, 0)
+  assert.match((await h.click('publish-catalog', picked.id, organizer, undefined, {
+    admin: true, guild: otherServer, channel: otherChannel,
+  })).message.content!, /preview expired or was already handled/)
+  assert.equal(await h.get(picked.id), null)
+  assert.equal((await h.click('publish-catalog', picked.id, member)).notify, undefined)
+  assert.equal((await h.click('publish-catalog', picked.id, organizer, undefined, { admin: false })).notify, undefined)
+
+  const publish = () => h.click('publish-catalog', picked.id, organizer, undefined, { admin: true })
+  const confirmations = await Promise.all([publish(), publish()])
+  assert.equal(confirmations.filter(result => result.notify === picked.id).length, 1)
   assert.equal(h.one('SELECT rawg_id FROM games WHERE session_id = ?', picked.id)?.rawg_id, 992151)
+  assert.equal(h.one('SELECT count(*) AS n FROM create_drafts')?.n, 0)
   const data = await details(h.env.DB, (await h.get(picked.id))!)
   const opening = await statement(h.env.DB, "SELECT * FROM deliveries WHERE session_id = ? AND kind = 'open'", picked.id).first<Delivery>()
   assert.ok(opening)
   const announced = board(data, at, opening).embeds![0].description!
   assert.match(announced, /Recommended game\*\* Awaiting votes/)
-  assert.match(announced, /About Death Note: Killer Within\*\*\n\*\*Publisher\*\* Bandai Namco/)
+  assert.match(announced, /About DEATH NOTE Killer Within\*\*\n\*\*Publisher\*\* Bandai Namco/)
   const liveDetails = await h.click('show', picked.id, member)
   assert.match(liveDetails.message.embeds![0].description!, /Publisher\*\* Bandai Namco/)
   assert.equal(catalog.mock.callCount(), 2)
-  const manual = await h.create({ game: 'Homebrew', catalog: false }, { now: at + 10 })
-  assert.match(manual.message.content!, /Game night created/)
+  const manual = await h.create({ game: 'Homebrew', verify_game: false }, { now: at + 10, preview: true })
+  assert.match(manual.message.embeds![0].description!, /couldn’t verify a single RAWG match/)
+  assert.match((await h.click('publish-typed', manual.id, organizer, undefined, { admin: true, now: at + 10 })).message.content!, /ready for voting/)
   assert.equal(h.one('SELECT rawg_id FROM games WHERE session_id = ?', manual.id)?.rawg_id, null)
   assert.equal(catalog.mock.callCount(), 2)
-  const unavailable = await h.create({ game: 'Homebrew' }, { now: at + 10 })
-  assert.match(unavailable.message.content!, /Used the game name you entered/)
+  const unavailable = await h.create({ game: 'Homebrew' }, { now: at + 10, preview: true })
+  assert.match(unavailable.message.embeds![0].description!, /couldn’t verify a single RAWG match/)
+  assert.equal(unavailable.notify, undefined)
+  assert.equal(await h.get(unavailable.id), null)
+  assert.match((await h.click('publish-typed', unavailable.id, organizer, undefined, { admin: true, now: at + 10 })).message.content!, /ready for voting/)
   assert.equal(h.one('SELECT rawg_id FROM games WHERE session_id = ?', unavailable.id)?.rawg_id, null)
-  const ambiguous = await h.create({ game: 'Doom' }, { now: at + 20 })
-  assert.match(ambiguous.message.content!, /Game night created/)
-  assert.equal(h.one('SELECT rawg_id FROM games WHERE session_id = ?', ambiguous.id)?.rawg_id, null)
+  const ambiguous = await h.create({ game: 'Doom' }, { now: at + 20, preview: true })
+  assert.match(ambiguous.message.embeds![0].description!, /couldn’t verify a single RAWG match/)
+  assert.doesNotMatch(JSON.stringify(ambiguous.message.components), /Publish with RAWG match/)
+  assert.match((await h.click('discard-draft', ambiguous.id, organizer, undefined, { now: at + 20 })).message.content!, /discarded/)
+  assert.equal(await h.get(ambiguous.id), null)
   assert.equal(catalog.mock.callCount(), 5)
+})
+
+test('an expired creation preview cannot publish and is removed by scheduling', async t => {
+  const h = harness({ RAWG_API_KEY: 'mock-rawg-key' })
+  await h.configure()
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ results: [] }))
+  const draft = await h.create({}, { preview: true })
+  await h.action('configure', { timezone: 'America/New_York' })
+  const shifted = await h.click('publish-typed', draft.id, organizer, undefined, { admin: true })
+  assert.match(shifted.message.content!, /time zone changed/)
+  assert.equal(await h.get(draft.id), null)
+  const expired = await h.click('publish-typed', draft.id, organizer, undefined, { admin: true, now: at + 901 })
+  assert.match(expired.message.content!, /preview expired/)
+  assert.equal(await h.get(draft.id), null)
+  await scheduleRounds(h.env.DB, at + 901)
+  assert.equal(h.one('SELECT count(*) AS n FROM create_drafts')?.n, 0)
 })
 
 test('guild and channel scope gate writes, details, autocomplete and public data', async () => {
@@ -332,8 +396,9 @@ test('signed interaction HTTP handler acknowledges within Discord protocol and p
     assert.equal(options.method, 'PATCH')
     assert.equal(options.redirect, 'manual')
     const body = JSON.parse(String(options.body))
-    assert.match(body.content, /New sessions/)
+    assert.match(body.content, /New sessions|preview expired or was already handled/)
     assert.deepEqual(body.allowed_mentions, { parse: [] })
+    assert.deepEqual(body.components, [])
     return Response.json({ id: '998000000000000001' })
   })
   const command: Interaction = {
@@ -345,6 +410,11 @@ test('signed interaction HTTP handler acknowledges within Discord protocol and p
     { type: 5, data: { flags: 64, allowed_mentions: { parse: [] } } })
   await Promise.all(work)
   assert.equal(fetch.mock.callCount(), 1)
+  const draftClick = { ...command, id: '200000000000000101', type: 3,
+    data: { custom_id: 'gn:discard-draft:200000000000000102' } }
+  assert.deepEqual(await (await worker.fetch(await request(draftClick), env, ctx)).json(), { type: 6 })
+  await Promise.all(work)
+  assert.equal(fetch.mock.callCount(), 2)
 })
 
 test('outbox honors 429, reconciles an ambiguous send, and never sends twice on retry', async t => {
@@ -489,12 +559,12 @@ test('RAWG search only offers automatic nomination when exactly one ballot is op
   const none = await search(at)
   assert.match(none.message.content!, /no open game night.*\/gamenight create/)
   assert.equal(none.message.components, undefined)
-  const { id } = await h.create()
+  const { id } = await h.create({ verify_game: false })
   const one = await search(at + 10)
   assert.match(one.message.content!, /nominate for.*Overcooked/)
   assert.match(JSON.stringify(one.message.components), new RegExp(`gn:rawg:${id}`))
   assert.equal(h.one('SELECT count(*) AS n FROM games WHERE rawg_id = 123')?.n, 0)
-  await h.create({ game: 'Another night' })
+  await h.create({ game: 'Another night', verify_game: false })
   const multiple = await search(at + 20)
   assert.match(multiple.message.content!, /More than one game night is open/)
   assert.equal(multiple.message.components, undefined)

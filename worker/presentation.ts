@@ -1,7 +1,7 @@
 import { channelLink, escapeText, timestamp, type Message } from './discord-api.ts'
 import { partyLabel } from './party.ts'
 import { recommend, type Details } from './store.ts'
-import type { Delivery, GameDetails, Session } from './types.ts'
+import type { CreateDraft, Delivery, GameDetails, Session } from './types.ts'
 
 const button = (custom_id: string, label: string, style = 2) => ({ type: 2, style, custom_id, label })
 const row = (...components: Record<string, unknown>[]) => ({ type: 1, components })
@@ -17,6 +17,29 @@ export function gameDetailsText(details: GameDetails) {
     details.notes && `**Game note** ${escapeText(details.notes)}`,
     details.sourceUrl && `[Game page on RAWG](${details.sourceUrl})`,
   ].filter(Boolean).join('\n')
+}
+
+export function createPreview(id: string, draft: CreateDraft, expires: number): Message {
+  const { catalog } = draft
+  const lines = [
+    catalog ? `**RAWG match** ${escapeText(catalog.name)}` : `**Game title** ${escapeText(draft.title)}`,
+    catalog ? gameDetailsText(catalog.details) : 'Play Villa couldn’t verify a single RAWG match. Check the title or publish it as typed.',
+    catalog && !catalog.details.sourceUrl && '[Game data by RAWG](https://rawg.io/)',
+    '',
+    `**Proposed times** ${draft.slots.map(slot => timestamp(slot, 'F')).join(' • ')}`,
+    `**Voting closes** ${timestamp(draft.deadline)}`,
+    `**Seats** ${draft.capacity ?? 'No limit'}`,
+    draft.description && escapeText(draft.description),
+  ]
+  return {
+    content: `Review the game and time before publishing. This preview expires ${timestamp(expires, 'R')}.`,
+    embeds: [{ title: 'Review game night', description: lines.filter(line => typeof line === 'string').join('\n') }],
+    components: [row(
+      ...(catalog ? [button(`gn:publish-catalog:${id}`, 'Publish with RAWG match', 1)] : []),
+      button(`gn:publish-typed:${id}`, 'Publish as typed', catalog ? 2 : 1),
+      button(`gn:discard-draft:${id}`, 'Discard preview', 4),
+    )],
+  }
 }
 
 export function rawgResults(games: { id: number; name: string; details: GameDetails }[], target: Session | 'none' | 'choose'): Message {
@@ -76,14 +99,14 @@ export function timeMenu(data: Details, current: number[]): Message {
     timeZone: data.item.timezone, weekday: 'short', month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
   })
-  const options = data.slots.map(slot => ({
-    label: local.format(slot.starts_at * 1000),
+  const options = data.slots.map((slot, index) => ({
+    label: `${index + 1}. ${local.format(slot.starts_at * 1000)}`,
     value: String(slot.starts_at),
     default: current.includes(slot.starts_at),
   }))
   if (!options.length) return { content: 'There are no proposed times yet.' }
   return {
-    content: `Select all times you can make. The times below use the session’s time zone.\n${data.slots.map(slot => timestamp(slot.starts_at)).join(' • ')}`,
+    content: `Select every time you can make. The list here uses your local time. Match the numbers in the dropdown, which uses ${data.item.timezone}.\n${data.slots.map((slot, index) => `${index + 1}. ${timestamp(slot.starts_at, 'F')}`).join('\n')}`,
     components: [
       row({ type: 3, custom_id: key('times', data.item), min_values: 1, max_values: options.length, options }),
       row(button(key('clear-times', data.item), 'Clear availability')),

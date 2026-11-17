@@ -1,14 +1,14 @@
 import { attendance, offerSpots, reschedule } from './attendance.ts'
 import { parsePlatforms, shortlist } from './party.ts'
 import { escapeText, timestamp, type Message } from './discord-api.ts'
-import { board, gameDetailsText, rawgResults, timeMenu, voteMenu } from './presentation.ts'
+import { board, createPreview, gameDetailsText, rawgResults, timeMenu, voteMenu } from './presentation.ts'
 import { allowRawg, matchRawgByName, rawgGame, searchRawg } from './rawg.ts'
 import {
-  acceptsBallots, addSlot, availability, checkedLabel, close, confirm, details, guild, manualSession,
+  acceptsBallots, addSlot, availability, cancellable, checkedLabel, close, confirm, details, guild, manualSession,
   mutate, nomination, rows, session, statement, vote,
 } from './store.ts'
 import { canonicalZone, dateChoices, parseFuture, parseStart, parseWeekly, timeChoices, weeklyWindow } from './time.ts'
-import { InputError, snowflake, type Env, type Game, type GameTags, type Guild, type RSVP, type Session, type Weekly } from './types.ts'
+import { InputError, snowflake, type CreateDraft, type Env, type Game, type GameTags, type Guild, type RSVP, type Session, type Weekly } from './types.ts'
 
 interface Option {
   name: string
@@ -105,6 +105,11 @@ function requiredChannel(ctx: Context, settings: Guild) {
   if (ctx.channelId !== settings.channel_id) throw new InputError(`Use this command in <#${settings.channel_id}>.`)
 }
 
+function mayCreate(ctx: Context, settings: Guild) {
+  requiredChannel(ctx, settings)
+  if (!ctx.admin && !fromRole(ctx, settings)) throw new InputError('Creating game nights requires Manage Server or the organizer role.')
+}
+
 function votingOpen(item: Session, at: number) {
   if (item.status !== 'open' || item.deadline <= at) throw new InputError('Voting has closed for this game night.')
 }
@@ -187,8 +192,7 @@ async function weekly(ctx: Context, settings: Guild, opts: Options) {
 }
 
 async function create(ctx: Context, settings: Guild, opts: Options, prior?: { session: Session; game: Game }) {
-  requiredChannel(ctx, settings)
-  if (!ctx.admin && !fromRole(ctx, settings)) throw new InputError('Creating game nights requires Manage Server or the organizer role.')
+  mayCreate(ctx, settings)
   const title = prior?.game.name ?? checkedLabel(opts.text('game'), 100)
   const description = prior?.session.description ?? (opts.text('description') ? checkedLabel(opts.text('description'), 400) : '')
   const zone = prior?.session.timezone ?? settings.timezone
@@ -201,17 +205,84 @@ async function create(ctx: Context, settings: Guild, opts: Options, prior?: { se
   if (deadline <= ctx.now || deadline >= slots[0]) throw new InputError('Set a future voting deadline before the first slot.')
   const id = ctx.interaction.id
   const capacity = prior?.session.capacity ?? opts.number('capacity', 1, 99)
-  const lookup = !prior && Boolean(ctx.env.RAWG_API_KEY) && opts.values.get('catalog') !== false
-  const catalog = lookup ? await matchRawgByName(ctx.env, ctx.guildId, ctx.now, title) : null
-  const game = catalog ? { rawg_id: catalog.id, image: catalog.image, game_details: JSON.stringify(catalog.details) } : undefined
+  const verifyGame = Boolean(ctx.env.RAWG_API_KEY) && opts.values.get('verify_game') !== false
+  if (!prior) return prepareDraft(ctx, { title, description, timezone: zone, slots, deadline, capacity }, verifyGame)
   const result = await mutate(ctx.db, id, ctx.now, gate =>
-    manualSession(ctx.db, settings, id, ctx.user, title, description, slots, deadline, capacity, ctx.now, gate, { prior, game }))
-  if (!result) return reply('This request was already handled.', id)
-  const message = `${prior ? 'Rematch poll' : 'Game night'} created. Voting closes ${timestamp(deadline)}. The channel announcement is queued.`
-  const info = catalog ? gameDetailsText(catalog.details)
-    : lookup ? 'Used the game name you entered. Use `/gamenight search` to browse RAWG matches.' : ''
-  const attribution = catalog && !catalog.details.sourceUrl ? '\n[Game data by RAWG](https://rawg.io/)' : ''
-  return reply(`${message}${info ? `\n${info}` : ''}${attribution}`, id)
+    manualSession(ctx.db, settings, id, ctx.user, title, description, slots, deadline, capacity, ctx.now, gate, { prior }))
+  if (!result) return reply('This request was already handled.')
+  if (!result[0]) return reply('Server settings changed. Run the command again to create the game night.')
+  return reply(`${prior ? 'Rematch poll' : 'Game night'} created. Voting closes ${timestamp(deadline)}. The channel announcement is queued.`, id)
+}
+
+function activeDraft(ctx: Context, id: string) {
+  return statement(ctx.db, `
+    SELECT payload, expires_at FROM create_drafts
+    WHERE id = ? AND guild_id = ? AND channel_id = ? AND organizer_id = ? AND expires_at > ?
+  `, id, ctx.guildId, ctx.channelId, ctx.user, ctx.now).first<{ payload: string; expires_at: number }>()
+}
+
+async function prepareDraft(ctx: Context, plan: Omit<CreateDraft, 'catalog'>, verifyGame: boolean): Promise<ActionResult> {
+  const id = ctx.interaction.id
+  const previous = await activeDraft(ctx, id)
+  if (previous) return { message: createPreview(id, JSON.parse(previous.payload) as CreateDraft, previous.expires_at) }
+  const catalog = verifyGame ? await matchRawgByName(ctx.env, ctx.guildId, ctx.now, plan.title) : null
+  const draft = { ...plan, catalog }
+  const expires = Math.min(ctx.now + 900, draft.deadline)
+  const result = await mutate(ctx.db, id, ctx.now, gate => [statement(ctx.db, `
+    INSERT INTO create_drafts (id, guild_id, channel_id, organizer_id, expires_at, payload)
+    SELECT ?, ?, ?, ?, ?, ? WHERE ${gate}
+  `, id, ctx.guildId, ctx.channelId, ctx.user, expires, JSON.stringify(draft))])
+  if (result?.[0]) return { message: createPreview(id, draft, expires) }
+  const saved = await activeDraft(ctx, id)
+  return saved ? { message: createPreview(id, JSON.parse(saved.payload) as CreateDraft, saved.expires_at) }
+    : reply('This request was already handled. Run `/gamenight create` for a new preview.')
+}
+
+const draftControl = /^gn:(publish-catalog|publish-typed|discard-draft):(\d{17,20})$/
+
+export function updatesCreatePreview(interaction: Interaction) {
+  return interaction.type === 3 && draftControl.test(interaction.data?.custom_id ?? '')
+}
+
+async function finishDraft(ctx: Context, action: string, id: string) {
+  const saved = await activeDraft(ctx, id)
+  const unavailable = 'This preview expired or was already handled. Run `/gamenight create` to start a new one.'
+  if (!saved) return reply(unavailable)
+  if (action === 'discard-draft') {
+    const removed = await statement(ctx.db, `
+      DELETE FROM create_drafts WHERE id = ? AND guild_id = ? AND channel_id = ? AND organizer_id = ? AND expires_at > ?
+    `, id, ctx.guildId, ctx.channelId, ctx.user, ctx.now).run()
+    return reply(removed.meta.changes ? 'Game night preview discarded.' : unavailable)
+  }
+
+  const settings = await settingsFor(ctx)
+  mayCreate(ctx, settings)
+  const draft = JSON.parse(saved.payload) as CreateDraft
+  if (draft.timezone !== settings.timezone) return reply('The server time zone changed. Run `/gamenight create` to pick a new time.')
+  const catalog = action === 'publish-catalog' ? draft.catalog : null
+  if (action === 'publish-catalog' && !catalog) return reply('Play Villa couldn’t verify a RAWG match. Start a new preview or publish using the typed name.')
+  const title = catalog?.name ?? draft.title
+  const game = catalog ? { rawg_id: catalog.id, image: catalog.image, game_details: JSON.stringify(catalog.details) } : undefined
+  const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => {
+    // The component pattern limits the draft ID to digits. D1 batches publish and consume it atomically.
+    const claim = `${gate} AND EXISTS (
+      SELECT 1 FROM create_drafts
+      WHERE id = '${id}' AND guild_id = '${ctx.guildId}' AND channel_id = '${ctx.channelId}'
+        AND organizer_id = '${ctx.user}' AND expires_at > ${ctx.now}
+    )`
+    return [
+      ...manualSession(ctx.db, settings, id, ctx.user, title, draft.description, draft.slots,
+        draft.deadline, draft.capacity, ctx.now, claim, { game }),
+      statement(ctx.db, `
+        DELETE FROM create_drafts
+        WHERE id = ? AND guild_id = ? AND channel_id = ? AND organizer_id = ? AND ${gate}
+          AND EXISTS (SELECT 1 FROM sessions WHERE id = ?)
+      `, id, ctx.guildId, ctx.channelId, ctx.user, id),
+    ]
+  })
+  return result?.[0]
+    ? reply(`**${escapeText(title)}** is ready for voting. The channel announcement is queued.`, id)
+    : reply('The preview changed or expired. Run `/gamenight create` to start a new one.')
 }
 
 async function edit(ctx: Context, item: Session, opts: Options) {
@@ -389,10 +460,7 @@ async function slash(ctx: Context): Promise<ActionResult> {
     case 'cancel': {
       const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [
         statement(ctx.db, `
-          UPDATE sessions SET status = 'cancelled', decided_at = ? WHERE id = ? AND status <> 'cancelled'
-          AND CASE WHEN status = 'confirmed' THEN starts_at + duration * 60
-            ELSE (SELECT max(starts_at) FROM slots WHERE session_id = sessions.id) END > ?
-          AND ${gate}
+          UPDATE sessions SET status = 'cancelled', decided_at = ? WHERE id = ? AND ${cancellable} AND ${gate}
         `, ctx.now, item.id, ctx.now),
       ])
       return reply(result?.[0] ? 'Game night cancelled. The announcement is queued.' : 'This game night already ended or was cancelled.', item.id)
@@ -411,7 +479,10 @@ async function slash(ctx: Context): Promise<ActionResult> {
 }
 
 async function component(ctx: Context): Promise<ActionResult> {
-  const match = /^gn:([a-z-]+):([a-f0-9-]{17,36})(?::(\d{1,9}))?$/.exec(ctx.interaction.data?.custom_id ?? '')
+  const customId = ctx.interaction.data?.custom_id ?? ''
+  const draft = draftControl.exec(customId)
+  if (draft) return finishDraft(ctx, draft[1], draft[2])
+  const match = /^gn:([a-z-]+):([a-f0-9-]{17,36})(?::(\d{1,9}))?$/.exec(customId)
   if (!match) throw new InputError('Unknown game night control.')
   const [, action, id, version] = match
   const revision = Number(version ?? 0)
@@ -498,15 +569,17 @@ export async function autocomplete(env: Env, interaction: Interaction, now: numb
   if (focus.name === 'session') {
     const rematches = command?.name === 'rematch'
     const searching = command?.name === 'search'
+    const cancelling = command?.name === 'cancel'
     return rows<{ name: string; value: string }>(ctx.db, `
       SELECT substr(title, 1, 74) || ' · ' || status AS name, id AS value
       FROM sessions WHERE guild_id = ? AND channel_id = ?
       AND (instr(lower(title), ?) OR instr(id, ?) OR ? = '')
       ${rematches ? "AND status = 'confirmed' AND starts_at + duration * 60 <= ?" : ''}
       ${searching ? `AND ${acceptsBallots}` : ''}
+      ${cancelling ? `AND ${cancellable}` : ''}
       ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'closed' THEN 1 WHEN 'confirmed' THEN 2 ELSE 3 END,
         created_at DESC LIMIT 25
-    `, ctx.guildId, ctx.channelId, query, query, query, ...(rematches || searching ? [now] : []))
+    `, ctx.guildId, ctx.channelId, query, query, query, ...(rematches || searching || cancelling ? [now] : []))
   }
   const item = await scopedSession(ctx, options(interaction).text('session'))
   if (focus.name === 'game') {
