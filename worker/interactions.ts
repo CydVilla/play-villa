@@ -1,7 +1,7 @@
 import { attendance, offerSpots, reschedule } from './attendance.ts'
 import { parsePlatforms, shortlist } from './party.ts'
 import { escapeText, timestamp, type Message } from './discord-api.ts'
-import { board, createPreview, gameDetailsText, rawgResults, timeMenu, voteMenu } from './presentation.ts'
+import { ballot, board, createPreview, gameDetailsText, rawgResults } from './presentation.ts'
 import { allowRawg, matchRawgByName, rawgGame, searchRawg } from './rawg.ts'
 import {
   acceptsBallots, addSlot, availability, cancellable, checkedLabel, close, confirm, details, guild, manualSession,
@@ -211,7 +211,7 @@ async function create(ctx: Context, settings: Guild, opts: Options, prior?: { se
     manualSession(ctx.db, settings, id, ctx.user, title, description, slots, deadline, capacity, ctx.now, gate, { prior }))
   if (!result) return reply('This request was already handled.')
   if (!result[0]) return reply('Server settings changed. Run the command again to create the game night.')
-  return reply(`${prior ? 'Rematch poll' : 'Game night'} created. Voting closes ${timestamp(deadline)}. The channel announcement is queued.`, id)
+  return reply(`Rematch poll created. Voting closes ${timestamp(deadline)}. The channel announcement is queued.`, id)
 }
 
 function activeDraft(ctx: Context, id: string) {
@@ -239,9 +239,12 @@ async function prepareDraft(ctx: Context, plan: Omit<CreateDraft, 'catalog'>, ve
 }
 
 const draftControl = /^gn:(publish-catalog|publish-typed|discard-draft):(\d{17,20})$/
+const panelControl = /^gn:(vote|times|clear-times):/
 
-export function updatesCreatePreview(interaction: Interaction) {
-  return interaction.type === 3 && draftControl.test(interaction.data?.custom_id ?? '')
+// These controls live on a private message and replace it in place instead of adding a reply.
+export function updatesMessage(interaction: Interaction) {
+  const id = interaction.data?.custom_id ?? ''
+  return interaction.type === 3 && (draftControl.test(id) || panelControl.test(id))
 }
 
 async function finishDraft(ctx: Context, action: string, id: string) {
@@ -312,7 +315,7 @@ async function edit(ctx: Context, item: Session, opts: Options) {
     deadline, ctx.now, deadline, capacity, capacity, capacity, ctx.now),
     ...offerSpots(ctx.db, item.id, ctx.now, gate),
   ])
-  return reply(result?.[0] ? 'Game night updated. The board and View details show the latest settings.'
+  return reply(result?.[0] ? 'Game night updated. The board in the channel shows the latest settings.'
     : 'The update did not apply. Check the voting deadline, cancellation status, and seats already taken or offered.', item.id)
 }
 
@@ -492,7 +495,7 @@ async function component(ctx: Context): Promise<ActionResult> {
   const item = await scopedSession(ctx, id)
   const values = ctx.interaction.data?.values ?? []
   if (action === 'show') return { message: board(await details(ctx.db, item), ctx.now) }
-  if (revision !== item.revision) throw new InputError('This game night moved. Open View details or use the updated board to RSVP.')
+  if (revision !== item.revision) throw new InputError('This game night moved. Use the newest board in the channel to RSVP.')
   if (action === 'rawg' && values.length === 1) {
     const rawgId = positive(values[0])
     if (rawgId > 2147483647) throw new InputError('Choose a valid RAWG game from the list.')
@@ -513,43 +516,40 @@ async function component(ctx: Context): Promise<ActionResult> {
         ? `Your spot is held until ${timestamp(waiting.offered_until, 'R')}. Select Going again to accept it.`
         : `The night is full. You are #${waiting.position} on the waitlist. Play Villa will tag you here if a spot opens. Use Maybe or Can’t attend to leave it.`, id)
     }
-    return reply('The game night is full or no longer accepting RSVPs. Use View details to see its status.')
+    return reply('The game night is full or no longer accepting RSVPs. Check the board in the channel for its status.')
   }
   votingOpen(item, ctx.now)
   if (action === 'surprise') {
     const data = await details(ctx.db, item)
     return reply(shortlist(data.games, [], false, null, true))
   }
-  if (action === 'vote-menu') {
-    const existing = await statement(ctx.db, 'SELECT game_id FROM votes WHERE session_id = ? AND user_id = ?', id, ctx.user)
-      .first<number>('game_id')
-    return { message: voteMenu(await details(ctx.db, item), existing) }
+  const panel = async (notice = '') => {
+    const [vote, times] = await ctx.db.batch([
+      statement(ctx.db, 'SELECT game_id FROM votes WHERE session_id = ? AND user_id = ?', id, ctx.user),
+      statement(ctx.db, 'SELECT starts_at FROM availability WHERE session_id = ? AND user_id = ? ORDER BY starts_at', id, ctx.user),
+    ])
+    const mine = {
+      vote: (vote.results[0] as { game_id: number } | undefined)?.game_id ?? null,
+      times: (times.results as { starts_at: number }[]).map(row => row.starts_at),
+    }
+    return { message: ballot(await details(ctx.db, item), mine, notice) }
   }
-  if (action === 'time-menu') {
-    const selected = await rows<{ starts_at: number }>(ctx.db,
-      'SELECT starts_at FROM availability WHERE session_id = ? AND user_id = ?', id, ctx.user)
-    return { message: timeMenu(await details(ctx.db, item), selected.map(row => row.starts_at)) }
-  }
-  // Voting for a game and marking times are separate. Remind members who did only one.
-  const hasRow = (table: 'votes' | 'availability') =>
-    statement(ctx.db, `SELECT 1 AS found FROM ${table} WHERE session_id = ? AND user_id = ? LIMIT 1`, id, ctx.user).first('found')
+  // vote-menu and time-menu are the controls on boards posted before the combined panel.
+  if (action === 'ballot' || action === 'vote-menu' || action === 'time-menu') return panel()
   if (action === 'vote' && values.length === 1) {
     const game = values[0] === 'none' ? null : positive(values[0])
     const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [vote(ctx.db, id, ctx.user, game, ctx.now, gate)])
-    if (!result) return reply('This request was already handled.')
-    if (game === null) return reply('Your vote has been cleared.', result[0] ? id : undefined)
-    if (!result[0]) return reply('The ballot has changed or closed.')
-    return reply(await hasRow('availability') ? 'Vote saved.'
-      : 'Vote saved. Use **Available times** on the board so your schedule counts too.', id)
+    const notice = !result ? '' : game === null ? 'Your vote was cleared.' : result[0] ? '✅ Vote saved.' : '⚠️ That game is no longer on the ballot.'
+    return { ...await panel(notice), notify: result?.[0] ? id : undefined }
   }
   if (action === 'times' || action === 'clear-times') {
-    if (values.length > 10 || (action === 'times' && !values.length)) throw new InputError('Choose up to ten available times.')
+    if (values.length > 10) throw new InputError('Choose up to ten available times.')
     const selected = action === 'clear-times' ? [] : [...new Set(values.map(positive))]
     const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => availability(ctx.db, id, ctx.user, selected, ctx.now, gate))
-    if (!result || (selected.length && result[1] !== selected.length)) return reply('The time list has changed or voting is closed.')
-    if (!selected.length) return reply('Availability cleared.', id)
-    return reply(await hasRow('votes') ? 'Availability saved.'
-      : 'Availability saved. Marking times doesn’t vote for a game. Use **Vote** on the board to pick one.', id)
+    const saved = result !== null && (!selected.length || result[1] === selected.length)
+    const notice = !result ? '' : !saved ? '⚠️ The time list changed. Pick again from the updated list.'
+      : selected.length ? `✅ Saved ${selected.length === 1 ? '1 time' : `${selected.length} times`}.` : 'Your times were cleared.'
+    return { ...await panel(notice), notify: saved ? id : undefined }
   }
   throw new InputError('Unknown game night control.')
 }
@@ -561,7 +561,7 @@ export async function handleInteraction(env: Env, interaction: Interaction, now:
   } catch (error) {
     if (error instanceof InputError) return reply(error.message)
     console.error('Game night interaction failed', interaction.id)
-    return reply('Play Villa could not complete that request. Try again or check View details.')
+    return reply('Play Villa could not complete that request. Try again in a moment.')
   }
 }
 
