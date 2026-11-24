@@ -2,7 +2,7 @@ import { syncEvents } from './events.ts'
 import { refreshBoards } from './board-refresh.ts'
 import { deliverPending } from './delivery.ts'
 import { mentions, patchReply } from './discord-api.ts'
-import { autocomplete, handleInteraction, updatesCreatePreview, type Interaction } from './interactions.ts'
+import { autocomplete, handleInteraction, updatesMessage, type Interaction } from './interactions.ts'
 import { publicSchedule } from './public.ts'
 import { scheduleRounds } from './schedule.ts'
 import { signedBody } from './signature.ts'
@@ -54,7 +54,7 @@ export default {
       if (notify) tasks.push(deliverPending(env, nowSeconds(), notify), syncEvents(env, nowSeconds(), notify), refreshBoards(env, nowSeconds(), notify))
       await Promise.allSettled(tasks)
     })())
-    return Response.json(updatesCreatePreview(interaction) ? { type: 6 }
+    return Response.json(updatesMessage(interaction) ? { type: 6 }
       : { type: 5, data: { flags: 64, allowed_mentions: mentions } })
   },
 

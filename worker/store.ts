@@ -114,7 +114,7 @@ export function manualSession(
 }
 
 export async function details(db: D1Database, item: Session) {
-  const [games, slots, counts, going, queue, event] = await db.batch([
+  const [games, slots, counts, going, queue, event, people] = await db.batch([
     statement(db, 'SELECT id, name, image, rawg_id, votes, platforms, crossplay, min_players, max_players, game_details FROM game_tally WHERE session_id = ? ORDER BY votes DESC, id', item.id),
     statement(db, 'SELECT starts_at, available FROM slot_tally WHERE session_id = ? ORDER BY starts_at', item.id),
     statement(db, `
@@ -124,6 +124,10 @@ export async function details(db: D1Database, item: Session) {
     statement(db, "SELECT user_id FROM rsvps WHERE session_id = ? AND response = 'going' AND needs_reconfirm = 0 ORDER BY user_id LIMIT 20", item.id),
     statement(db, 'SELECT count(*) AS total FROM waitlist WHERE session_id = ?', item.id),
     statement(db, 'SELECT event_id FROM discord_events WHERE session_id = ?', item.id),
+    statement(db, `
+      SELECT (SELECT count(*) FROM votes WHERE session_id = ?) AS voters,
+        (SELECT count(DISTINCT user_id) FROM availability WHERE session_id = ?) AS available
+    `, item.id, item.id),
   ])
   const rsvps = { going: 0, maybe: 0, declined: 0, reconfirm: 0 }
   for (const row of counts.results as { status: RSVP | 'reconfirm'; total: number }[]) rsvps[row.status] = row.total
@@ -135,6 +139,7 @@ export async function details(db: D1Database, item: Session) {
     rsvps,
     waiting: (queue.results[0] as { total: number } | undefined)?.total ?? 0,
     eventId: (event.results[0] as { event_id: string | null } | undefined)?.event_id ?? null,
+    ...(people.results[0] as { voters: number; available: number }),
   }
 }
 

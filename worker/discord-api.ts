@@ -6,6 +6,7 @@ export type Message = {
     title?: string
     description?: string
     color?: number
+    thumbnail?: { url: string }
     footer?: { text: string }
   }[]
   components?: Record<string, unknown>[]

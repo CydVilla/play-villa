@@ -4,7 +4,7 @@ import worker from '../worker/index.ts'
 import { refreshBoards } from '../worker/board-refresh.ts'
 import { syncEvents } from '../worker/events.ts'
 import { deliverPending } from '../worker/delivery.ts'
-import { autocomplete, handleInteraction, type Interaction } from '../worker/interactions.ts'
+import { autocomplete, handleInteraction, updatesMessage, type Interaction } from '../worker/interactions.ts'
 import { board } from '../worker/presentation.ts'
 import { publicSchedule } from '../worker/public.ts'
 import { scheduleRounds } from '../worker/schedule.ts'
@@ -132,11 +132,11 @@ test('shared vote totals refresh the public board after members vote', async t =
   })
   await refreshBoards({ ...h.env, DISCORD_BOT_TOKEN: 'mock-token' }, at, id)
   assert.equal(fetch.mock.callCount(), 1)
-  assert.match(JSON.stringify(patches[0]), /Overcooked.*2 vote\(s\)/)
+  assert.match(JSON.stringify(patches[0]), /Overcooked\*\* · 2 votes/)
   assert.doesNotMatch(JSON.stringify(patches[0]), /Session ID/)
   assert.deepEqual(patches[0].allowed_mentions, { parse: [] })
   assert.equal(h.one('SELECT generation = synced AS current FROM board_updates WHERE session_id = ?', id)?.current, 1)
-  assert.match(JSON.stringify((await h.click('show', id, member)).message), /Overcooked.*2 vote\(s\)/)
+  assert.match(JSON.stringify((await h.click('show', id, member)).message), /Overcooked\*\* · 2 votes/)
 })
 
 test('board refresh waits for the post, catches votes made mid-edit, and only edits the newest board', async t => {
@@ -166,8 +166,8 @@ test('board refresh waits for the post, catches votes made mid-edit, and only ed
   }
   await refreshBoards(env, at + 15, id)
   assert.equal(fetch.mock.callCount(), 2)
-  assert.match(bodies[0], /1 vote\(s\)/)
-  assert.match(bodies[1], /2 vote\(s\)/)
+  assert.match(bodies[0], /Overcooked\*\* · 1 vote\\n/)
+  assert.match(bodies[1], /Overcooked\*\* · 2 votes/)
   assert.equal(job()?.pending, 0)
 
   await h.click('vote', id, organizer, ['1'])
@@ -190,20 +190,54 @@ test('board refresh waits for the post, catches votes made mid-edit, and only ed
   assert.deepEqual({ ...job() }, { pending: 0, next_at: 0, error: 'There is no posted board to refresh.' })
 })
 
+test('boards show live ballot controls and cover art, and RSVP buttons only once a night is confirmed', async () => {
+  const h = harness()
+  await h.configure()
+  const { id } = await h.create()
+  const cover = 'https://media.rawg.io/media/games/cover.jpg'
+  h.db.sqlite.prepare('UPDATE games SET image = ? WHERE session_id = ?').run(cover, id)
+  const controls = (message: { components?: Record<string, unknown>[] }) =>
+    (message.components ?? []).flatMap(row => (row.components as { custom_id: string }[]).map(item => item.custom_id))
+  const open = (await h.action('show', { session: id })).message
+  assert.deepEqual(controls(open), [`gn:ballot:${id}`, `gn:surprise:${id}`])
+  assert.equal(open.embeds![0].thumbnail?.url, cover)
+  assert.doesNotMatch(open.embeds![0].description!, /RSVPs/)
+  await h.click('times', id, member, [String(time1)])
+  await h.click('vote', id, member, ['1'])
+  assert.match((await h.action('show', { session: id })).message.embeds![0].description!, /1 voted · 1 picked times/)
+  await h.action('confirm', { session: id })
+  const data = await details(h.env.DB, (await h.get(id))!)
+  const confirmed = board(data, at)
+  assert.deepEqual(controls(confirmed), ['going', 'maybe', 'declined'].map(action => `gn:${action}:${id}`))
+  assert.doesNotMatch(confirmed.embeds![0].description!, /\*\*Games\*\*/)
+  const reminder = board(data, at, { id: 9, kind: 'reminder' } as Delivery)
+  assert.deepEqual(controls(reminder).at(-1), `gn:show:${id}`)
+  const click = (custom_id: string) => ({ type: 3, data: { custom_id } }) as Interaction
+  assert.equal(updatesMessage(click(`gn:vote:${id}`)), true)
+  assert.equal(updatesMessage(click(`gn:times:${id}`)), true)
+  assert.equal(updatesMessage(click(`gn:ballot:${id}`)), false)
+  assert.equal(updatesMessage(click(`gn:going:${id}`)), false)
+})
+
 test('availability is replaceable, invalid slots preserve the ballot, and RSVP limits are atomic', async () => {
   const h = harness()
   await h.configure()
   const { id } = await h.create({ capacity: 1 })
-  const menu = await h.click('time-menu', id, member)
-  assert.match(JSON.stringify(menu.message), /"max_values":2/)
-  assert.match(menu.message.content!, new RegExp(`your local time[\\s\\S]*1\\. <t:${time1}:F>[\\s\\S]*2\\. <t:${time2}:F>`))
-  assert.match(JSON.stringify(menu.message.components), /"label":"1\. Fri/)
-  assert.match((await h.click('times', id, member, [String(time1), String(time2)])).message.content!, /doesn’t vote for a game.*\*\*Vote\*\*/)
+  const panel = await h.click('ballot', id, member)
+  assert.match(JSON.stringify(panel.message), /"min_values":0,"max_values":2/)
+  assert.match(panel.message.content!, new RegExp(`Not voted yet[\\s\\S]*None picked yet[\\s\\S]*1\\. <t:${time1}:F>[\\s\\S]*2\\. <t:${time2}:F>`))
+  assert.match(JSON.stringify(panel.message.components), /"label":"1\. Fri/)
+  assert.doesNotMatch(JSON.stringify(panel.message.components), /Retract my vote/)
+  assert.deepEqual((await h.click('time-menu', id, member)).message, panel.message)
+  const saved = await h.click('times', id, member, [String(time1), String(time2)])
+  assert.match(saved.message.content!, /^✅ Saved 2 times\.\n\*\*Your vote\*\* Not voted yet\n\*\*Your times\*\* 2 of 2/)
+  assert.match(saved.message.content!, /:F> · 1 available/)
+  assert.equal(saved.notify, id)
   assert.equal(h.one('SELECT count(*) AS n FROM availability')?.n, 2)
-  assert.equal((await h.click('vote', id, member, ['1'])).message.content, 'Vote saved.')
-  assert.match((await h.click('vote', id, otherMember, ['1'])).message.content!, /Vote saved\. Use \*\*Available times\*\*/)
-  assert.equal((await h.click('times', id, member, [String(time1), String(time2)])).message.content, 'Availability saved.')
-  await h.click('times', id, member, [String(time2), '1234'])
+  const voted = await h.click('vote', id, member, ['1'])
+  assert.match(voted.message.content!, /^✅ Vote saved\.\n\*\*Your vote\*\* Overcooked/)
+  assert.match(JSON.stringify(voted.message.components), /"default":true,"description":"1 vote"[\s\S]*Retract my vote/)
+  assert.match((await h.click('times', id, member, [String(time2), '1234'])).message.content!, /time list changed/)
   assert.equal(h.one('SELECT count(*) AS n FROM availability')?.n, 2)
   await h.click('times', id, member, [String(time2)])
   assert.equal(h.one('SELECT starts_at FROM availability')?.starts_at, time2)
@@ -214,7 +248,10 @@ test('availability is replaceable, invalid slots preserve the ballot, and RSVP l
   assert.equal(h.one("SELECT user_id FROM rsvps WHERE response = 'going'")?.user_id, otherMember)
   await h.click('declined', id, member)
   assert.equal(h.one('SELECT available FROM slot_tally WHERE starts_at = ?', time2)?.available, 0)
-  assert.equal((await h.click('clear-times', id, member)).message.content, 'Availability cleared.')
+  assert.match((await h.click('times', id, member, [])).message.content!, /^Your times were cleared\.\n/)
+  assert.equal(h.one('SELECT count(*) AS n FROM availability')?.n, 0)
+  await h.click('times', id, member, [String(time1)])
+  assert.match((await h.click('clear-times', id, member)).message.content!, /^Your times were cleared/)
   assert.equal(h.one('SELECT count(*) AS n FROM availability')?.n, 0)
 })
 
@@ -379,7 +416,7 @@ test('create previews a RAWG match privately and publishes it once after the own
   const opening = await statement(h.env.DB, "SELECT * FROM deliveries WHERE session_id = ? AND kind = 'open'", picked.id).first<Delivery>()
   assert.ok(opening)
   const announced = board(data, at, opening).embeds![0].description!
-  assert.match(announced, /Recommended game\*\* Awaiting votes/)
+  assert.match(announced, /Leading game\*\* No votes yet/)
   assert.match(announced, /About DEATH NOTE Killer Within\*\*\n\*\*Publisher\*\* Bandai Namco/)
   const liveDetails = await h.click('show', picked.id, member)
   assert.match(liveDetails.message.embeds![0].description!, /Publisher\*\* Bandai Namco/)

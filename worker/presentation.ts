@@ -66,56 +66,70 @@ export function rawgResults(games: { id: number; name: string; details: GameDeta
   }
 }
 
-function controls(item: Session, at: number) {
-  const { status, deadline } = item
-  const details = button(key('show', item), 'View details')
-  if (status === 'cancelled') return [row(details)]
-  const buttons = [
-    button(key('going', item), 'Going', 3),
-    button(key('maybe', item), 'Maybe'),
-    button(key('declined', item), 'Can’t attend', 4),
-  ]
-  return status === 'open' && deadline > at
-    ? [row(button(key('vote-menu', item), 'Vote', 1), button(key('time-menu', item), 'Available times', 1), button(key('surprise', item), '🎲 Surprise me'), details), row(...buttons)]
-    : [row(details, ...buttons)]
+const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`
+
+function meter(value: number, max: number, width = 6) {
+  const filled = max > 0 ? Math.round(value / max * width) : 0
+  return '▰'.repeat(filled) + '▱'.repeat(width - filled)
 }
 
-export function voteMenu(data: Details, current: number | null): Message {
-  if (!data.games.length) return { content: 'Use `/gamenight nominate` to add the first game.' }
-  return {
-    content: 'Choose a game or retract your vote.',
-    components: [row({
-      type: 3, custom_id: key('vote', data.item),
-      options: [
-        ...data.games.map(game => ({ label: label(game.name), value: String(game.id), default: current === game.id })),
-        { label: 'Retract my vote', value: 'none' },
-      ],
-    })],
-  }
+const isLive = (item: Session, at: number) => item.status === 'open' && item.deadline > at
+
+function controls(item: Session, at: number, delivery?: Delivery) {
+  if (isLive(item, at)) return [row(button(key('ballot', item), 'Vote & pick times', 1), button(key('surprise', item), '🎲 Surprise me'))]
+  if (item.status !== 'confirmed') return []
+  const rsvp = [button(key('going', item), 'Going', 3), button(key('maybe', item), 'Maybe'), button(key('declined', item), 'Can’t attend', 4)]
+  // Reminders are snapshots. The live board and View details show current attendance.
+  return [row(...rsvp, ...(delivery?.kind === 'reminder' ? [button(key('show', item), 'View details')] : []))]
 }
 
-export function timeMenu(data: Details, current: number[]): Message {
+export interface MyBallot {
+  vote: number | null
+  times: number[]
+}
+
+// One private panel holds both choices. Each change updates this panel in place.
+export function ballot(data: Details, mine: MyBallot, notice = ''): Message {
+  const { item, games, slots } = data
   const local = new Intl.DateTimeFormat('en-US', {
-    timeZone: data.item.timezone, weekday: 'short', month: 'short', day: 'numeric',
+    timeZone: item.timezone, weekday: 'short', month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
   })
-  const options = data.slots.map((slot, index) => ({
-    label: `${index + 1}. ${local.format(slot.starts_at * 1000)}`,
-    value: String(slot.starts_at),
-    default: current.includes(slot.starts_at),
-  }))
-  if (!options.length) return { content: 'There are no proposed times yet.' }
-  return {
-    content: `Select every time you can make. The list here uses your local time. Match the numbers in the dropdown, which uses ${data.item.timezone}.\n${data.slots.map((slot, index) => `${index + 1}. ${timestamp(slot.starts_at, 'F')}`).join('\n')}`,
-    components: [
-      row({ type: 3, custom_id: key('times', data.item), min_values: 1, max_values: options.length, options }),
-      row(button(key('clear-times', data.item), 'Clear availability')),
+  const myGame = games.find(game => game.id === mine.vote)
+  const lines = [
+    notice,
+    `**Your vote** ${myGame ? escapeText(myGame.name) : 'Not voted yet'}`,
+    `**Your times** ${mine.times.length ? `${mine.times.length} of ${slots.length}` : 'None picked yet'}`,
+    slots.length > 0 && `\nTimes in your local time. The numbers match the list below, shown in ${item.timezone}.`,
+    ...slots.map((slot, index) => `${index + 1}. ${timestamp(slot.starts_at, 'F')} · ${slot.available} available`),
+    `Voting closes ${timestamp(item.deadline, 'R')}.`,
+  ].filter(line => typeof line === 'string' && line)
+  const components = []
+  if (games.length) components.push(row({
+    type: 3, custom_id: key('vote', item), placeholder: 'Vote for a game',
+    options: [
+      ...games.map(game => ({
+        label: label(game.name), value: String(game.id), default: mine.vote === game.id,
+        description: plural(game.votes, 'vote'),
+      })),
+      ...(mine.vote !== null ? [{ label: 'Retract my vote', value: 'none' }] : []),
     ],
-  }
+  }))
+  if (slots.length) components.push(row({
+    type: 3, custom_id: key('times', item), placeholder: 'Pick every time you can make',
+    min_values: 0, max_values: slots.length,
+    options: slots.map((slot, index) => ({
+      label: `${index + 1}. ${local.format(slot.starts_at * 1000)}`,
+      value: String(slot.starts_at),
+      default: mine.times.includes(slot.starts_at),
+    })),
+  }))
+  if (!games.length) lines.push('No games yet. Use `/gamenight nominate` to add one.')
+  return { content: lines.join('\n'), components }
 }
 
 export function board(data: Details, at: number, delivery?: Delivery): Message {
-  const { item, games, slots, going, rsvps, waiting, eventId } = data
+  const { item, games, slots, going, rsvps, waiting, eventId, voters, available } = data
   const selected = games.find(game => game.id === item.game_id)
   const status = item.status === 'open' && at >= item.deadline ? 'closed' : item.status
   const isBallot = status === 'open' || status === 'closed'
@@ -124,54 +138,54 @@ export function board(data: Details, at: number, delivery?: Delivery): Message {
   const suggestedTime = item.status === 'open' ? proposal.slot?.starts_at : item.starts_at
   const featuredGame = isBallot ? suggestedGame ?? games[0] : status === 'confirmed' ? selected : undefined
   const gameDetails = featuredGame && gameDetailsText(JSON.parse(featuredGame.game_details) as GameDetails)
+  const lead = status === 'open' ? 'Leading' : 'Recommended'
+  const mostVotes = Math.max(0, ...games.map(game => game.votes))
+  const mostAvailable = Math.max(0, ...slots.map(slot => slot.available))
+  const shownGames = games.slice(0, 10)
   const highlights = [
     item.description && escapeText(item.description),
-    status === 'open' && `**Voting closes** ${timestamp(item.deadline, 'R')}`,
-    status === 'closed' && 'Voting is closed. An organizer can confirm the session.',
+    status === 'open' && `**Voting closes** ${timestamp(item.deadline, 'R')} · ${voters} voted · ${available} picked times`,
+    status === 'closed' && 'Voting is closed. An organizer can confirm the night.',
     status === 'cancelled' && 'This game night was cancelled.',
     delivery?.kind === 'rescheduled' && 'The start time changed. Please RSVP again on this board.',
     status === 'confirmed' && item.starts_at && selected &&
       `**${escapeText(selected.name)}** • ${timestamp(item.starts_at, 'F')}`,
-    isBallot && `**Recommended game** ${suggestedGame ? escapeText(suggestedGame.name) : 'Awaiting votes'}`,
-    isBallot && `**Recommended time** ${suggestedTime ? timestamp(suggestedTime) : 'Awaiting availability'}`,
-    isBallot && featuredGame && gameDetails && `\n**About ${escapeText(featuredGame.name)}**`,
+    isBallot && `**${lead} game** ${suggestedGame ? escapeText(suggestedGame.name) : 'No votes yet'}`,
+    isBallot && `**${lead} time** ${suggestedTime ? timestamp(suggestedTime) : 'No times picked yet'}`,
+    isBallot && shownGames.length > 0 && '\n**Games**',
+    ...(isBallot ? shownGames.map(game => {
+      const tags = partyLabel(game)
+      return `${meter(game.votes, mostVotes)} **${escapeText(game.name)}** · ${plural(game.votes, 'vote')}${tags ? ` · ${tags}` : ''}`
+    }) : []),
+    isBallot && games.length > shownGames.length && `…and ${games.length - shownGames.length} more in the vote menu.`,
+    isBallot && slots.length > 0 && '\n**Times** (shown in your time zone)',
+    ...(isBallot ? slots.map(slot => `${meter(slot.available, mostAvailable)} ${timestamp(slot.starts_at)} · ${slot.available} available`) : []),
+    featuredGame && gameDetails && `\n**About ${escapeText(featuredGame.name)}**`,
     gameDetails,
     status === 'confirmed' && (item.voice_id
       ? `[Join voice channel](${channelLink(item.guild_id, item.voice_id)})`
       : `**Meet in** <#${item.channel_id}>`),
     status === 'confirmed' && eventId && `[Open Discord Event](https://discord.com/events/${item.guild_id}/${eventId})`,
-    status !== 'cancelled' && `**RSVPs** ${rsvps.going}${item.capacity ? `/${item.capacity}` : ''} going • ${rsvps.maybe} maybe • ${rsvps.declined} can’t attend`,
+    status === 'confirmed' && `**RSVPs** ${rsvps.going}${item.capacity ? `/${item.capacity}` : ''} going • ${rsvps.maybe} maybe • ${rsvps.declined} can’t attend`,
     status === 'confirmed' && waiting > 0 && `**Waitlist** ${waiting} waiting or offered`,
     status === 'confirmed' && rsvps.reconfirm > 0 && `**RSVP again** ${rsvps.reconfirm} pending after reschedule`,
     status === 'confirmed' && going.length > 0 &&
       `**Going** ${going.map(id => `<@${id}>`).join(', ')}${rsvps.going > going.length ? ` +${rsvps.going - going.length} more` : ''}`,
     status !== 'cancelled' && games.some(game => game.rawg_id) && '[Game data by RAWG](https://rawg.io/)',
-  ].filter(Boolean)
-  const listings = [
-    ...games.slice(0, 8).map(game => {
-      const tags = partyLabel(game)
-      return `#${game.id} ${escapeText(game.name)} · ${game.votes} vote(s)${tags ? ` · ${tags}` : ''}`
-    }),
-    games.length > 8 && `${games.length - 8} more games in the vote menu or companion site.`,
-    ...slots.map(slot => `${timestamp(slot.starts_at)} · ${slot.available} available`),
-  ].filter(Boolean)
-  const sessionId = delivery ? '' : `\nSession ID: \`${item.id}\``
-  const remaining = Math.min(1900, 4096 - highlights.join('\n').length - sessionId.length - 3)
-  if (listings.length && remaining > 0) highlights.push('', listings.join('\n').slice(0, remaining))
-  if (sessionId) highlights.push(sessionId)
+  ].filter(line => typeof line === 'string' && line)
   const prefix = delivery?.kind === 'rescheduled' ? 'Rescheduled · '
     : delivery?.kind === 'reminder' ? 'Coming up · ' : status === 'confirmed' ? 'Confirmed · ' : ''
   return {
     embeds: [{
       title: prefix + escapeText(item.title),
-      description: highlights.join('\n'),
+      description: highlights.join('\n').slice(0, 4096),
       color: status === 'cancelled' ? 0xaa4466 : 0x35d99b,
+      thumbnail: featuredGame?.image && status !== 'cancelled' ? { url: featuredGame.image } : undefined,
       footer: delivery ? { text: `Play Villa · ${delivery.id}` } : undefined,
     }],
-    components: controls(item, at),
+    components: controls(item, at, delivery),
   }
 }
-
 
 export function spotOffer(item: Session, delivery: Delivery, offer: { user_id: string; offered_until: number }): Message {
   return {
