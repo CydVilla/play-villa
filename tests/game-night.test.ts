@@ -4,12 +4,13 @@ import worker from '../worker/index.ts'
 import { refreshBoards } from '../worker/board-refresh.ts'
 import { syncEvents } from '../worker/events.ts'
 import { deliverPending } from '../worker/delivery.ts'
-import { autocomplete, handleInteraction, updatesMessage, type Interaction } from '../worker/interactions.ts'
+import { autocomplete, handleInteraction, openForm, opensForm, updatesMessage, type Interaction } from '../worker/interactions.ts'
 import { board } from '../worker/presentation.ts'
 import { publicSchedule } from '../worker/public.ts'
 import { scheduleRounds } from '../worker/schedule.ts'
 import { details, recommend, session, statement } from '../worker/store.ts'
-import { canonicalZone, parseTime, parseWeekly, weeklyWindow } from '../worker/time.ts'
+import { canonicalZone, parseDay, parseDayTime, parseTime, parseWeekly, weeklyWindow } from '../worker/time.ts'
+import { parsePlatforms } from '../worker/party.ts'
 import { nowSeconds, type Delivery, type Env, type Session } from '../worker/types.ts'
 import { calendar } from '../src/calendar.js'
 import { database } from './database.ts'
@@ -204,7 +205,7 @@ test('boards show live ballot controls and cover art, and RSVP buttons only once
   assert.doesNotMatch(open.embeds![0].description!, /RSVPs/)
   await h.click('times', id, member, [String(time1)])
   await h.click('vote', id, member, ['1'])
-  assert.match((await h.action('show', { session: id })).message.embeds![0].description!, /1 voted · 1 picked times/)
+  assert.match((await h.action('show', { session: id })).message.embeds![0].description!, /1 voted · 1 picked a time/)
   await h.action('confirm', { session: id })
   const data = await details(h.env.DB, (await h.get(id))!)
   const confirmed = board(data, at)
@@ -217,6 +218,93 @@ test('boards show live ballot controls and cover art, and RSVP buttons only once
   assert.equal(updatesMessage(click(`gn:times:${id}`)), true)
   assert.equal(updatesMessage(click(`gn:ballot:${id}`)), false)
   assert.equal(updatesMessage(click(`gn:going:${id}`)), false)
+})
+
+test('members suggest games and times from the panel, and only the suggester or an organizer edits details', async () => {
+  const h = harness()
+  await h.configure()
+  const { id } = await h.create()
+  const form = (kind: string, fields: Record<string, string>, user = member, interactionId = String(300000000000000000n + BigInt(Object.keys(fields).join().length + kind.length))) =>
+    handleInteraction(h.env, {
+      type: 5, id: interactionId, application_id: app, token: 'test-token', guild_id: server, channel_id: channel,
+      member: { user: { id: user }, permissions: '0' },
+      data: { custom_id: `gn:add-${kind}:${id}`, components: Object.entries(fields).map(([custom_id, value]) =>
+        ({ type: 1, components: [{ type: 4, custom_id, value }] })) },
+    }, at)
+  const button = (kind: string, user = member) => ({
+    type: 3, id: '300000000000000100', application_id: app, token: 'test-token', guild_id: server, channel_id: channel,
+    member: { user: { id: user }, permissions: '0' }, data: { custom_id: `gn:suggest-${kind}:${id}` },
+  }) as Interaction
+
+  assert.equal(opensForm(button('game')), true)
+  const opened = await openForm(h.env, button('time'), at) as { type: number; data: { custom_id: string; title: string } }
+  assert.deepEqual([opened.type, opened.data.custom_id, opened.data.title], [9, `gn:add-time:${id}`, 'Suggest a time'])
+  assert.equal(updatesMessage({ type: 5, data: { custom_id: `gn:add-game:${id}` } } as Interaction), true)
+
+  const added = await form('game', { name: 'Lethal Company', platforms: 'Steam, PS5', notes: 'Buy\nthe 4-pack.' })
+  assert.match(added.message.content!, /^✅ Added \*\*Lethal Company\*\*\. Vote for it below/)
+  assert.equal(added.notify, id)
+  const saved = h.one("SELECT platforms, game_details, nominated_by FROM games WHERE name = 'Lethal Company'")
+  assert.deepEqual({ ...saved }, { platforms: '["pc","playstation"]', game_details: '{"notes":"Buy the 4-pack."}', nominated_by: member })
+  assert.match(JSON.stringify(added.message.components), /"description":"0 votes · PC, PlayStation"/)
+  assert.match((await form('game', { name: 'lethal  company' }, member, '300000000000000201')).message.content!, /already on the ballot/)
+  assert.match((await form('game', { name: 'Tetris', platforms: 'Switch, Dreamcast' }, member, '300000000000000202')).message.content!,
+    /^✅ Added \*\*Tetris\*\*\. Vote for it below if you like it\. Platforms not recognised: dreamcast\./)
+  assert.equal(h.one("SELECT platforms FROM games WHERE name = 'Tetris'")?.platforms, '["switch"]')
+
+  const time = await form('time', { day: 'Sun, Nov 22', time: '8:30 p.m.' }, member, '300000000000000203')
+  assert.match(time.message.content!, new RegExp(`^✅ Added <t:${parseTime('2026-11-22 20:30', 'UTC')}:F>`))
+  assert.match((await form('time', { day: 'Nov 21', time: '9 PM' }, member, '300000000000000204')).message.content!, /already listed/)
+  assert.match((await form('time', { day: 'tomorrow', time: '8 PM' }, member, '300000000000000205')).message.content!, /after voting closes/)
+  assert.match((await form('time', { day: 'someday', time: '8 PM' }, member, '300000000000000206')).message.content!, /Enter a day like Sat/)
+  assert.match((await form('time', { day: 'Nov 23', time: '8' }, member, '300000000000000207')).message.content!, /^⚠️ Add AM or PM to 8, like 8 PM\./)
+  assert.equal(h.one('SELECT count(*) AS n FROM slots WHERE session_id = ?', id)?.n, 3)
+
+  const game = String(h.one("SELECT id FROM games WHERE name = 'Lethal Company'")?.id)
+  const tag = (user: string, fields: Record<string, string | number | boolean>) =>
+    h.action('tag', { session: id, game, ...fields }, { user, admin: false })
+  assert.match((await tag(otherMember, { notes: 'Nope' })).message.content!, /games you suggested/)
+  assert.match((await tag(member, { crossplay: true, max_players: 4 })).message.content!, /Game information updated/)
+  const listed = (await h.action('show', { session: id })).message.embeds![0].description!
+  assert.match(listed, /\*\*Lethal Company\*\* · 0 votes · PC, PlayStation · crossplay · 1–4 players/)
+  await h.click('vote', id, member, [game])
+  await h.action('confirm', { session: id, game, time: String(time1) })
+  assert.match((await tag(member, { notes: 'Late edit' })).message.content!, /Voting has closed/)
+  assert.match((await h.action('tag', { session: id, game, notes: 'Bring headsets.' })).message.content!, /updated/)
+  const confirmed = (await h.action('show', { session: id })).message.embeds![0].description!
+  assert.match(confirmed, /\*\*Tags\*\* PC, PlayStation · crossplay · 1–4 players\n\*\*Game note\*\* Bring headsets\\\./)
+})
+
+test('friendly day and platform input', () => {
+  const tuesday = parseTime('2026-11-24 16:00', 'UTC')
+  const day = (text: string) => parseDay(text, 'America/New_York', tuesday)
+  assert.deepEqual(['Sat', 'saturday', 'tomorrow', 'Nov 29', '29th November', 'Sat, Nov 28', '11/29', '1/5', '2026-12-01'].map(day),
+    ['2026-11-28', '2026-11-28', '2026-11-25', '2026-11-29', '2026-11-29', '2026-11-28', '2026-11-29', '2027-01-05', '2026-12-01'])
+  assert.throws(() => day('Feb 30'), /real calendar day/)
+  assert.throws(() => day('soon'), /Enter a day like/)
+  assert.deepEqual(parsePlatforms('Steam / Xbox Series X & PS5, Nintendo Switch, iOS'), ['pc', 'xbox', 'playstation', 'switch', 'mobile'])
+  assert.deepEqual(parsePlatforms('Xbox Series X/S, PC (Steam), Game Pass, Windows PC + Wii U'), ['xbox', 'pc', 'switch'])
+  const saturdayNight = parseTime('2026-11-28 21:00', 'America/New_York')
+  const at = (day: string, time: string, now = saturdayNight) => parseDayTime(day, time, 'America/New_York', now)
+  assert.equal(at('Sat', '8 PM'), parseTime('2026-12-05 20:00', 'America/New_York'))
+  assert.equal(at('Sat', '10:30 pm'), parseTime('2026-11-28 22:30', 'America/New_York'))
+  assert.equal(at('next sat', '10:30 PM'), parseTime('2026-12-05 22:30', 'America/New_York'))
+  assert.equal(at('Sun', '20:30'), parseTime('2026-11-29 20:30', 'America/New_York'))
+  assert.equal(at('Sun', '08:00'), parseTime('2026-11-29 08:00', 'America/New_York'))
+  assert.throws(() => at('Sun', '8'), /Add AM or PM/)
+  assert.throws(() => at('Sun', 'eight'), /Enter a time like/)
+  assert.deepEqual(parsePlatforms(''), [])
+  assert.throws(() => parsePlatforms('Dreamcast'), /Use platforms from/)
+})
+
+test('create keeps the organizer’s platforms and note with either publish choice', async () => {
+  const h = harness()
+  await h.configure()
+  const preview = await h.create({ platforms: 'PC, Switch', notes: 'Free on Steam this week.' }, { preview: true })
+  assert.match(preview.message.embeds![0].description!, /Your platforms\*\* PC, Switch\n\*\*Your note\*\* Free on Steam this week\\\./)
+  await h.click('publish-typed', preview.id, organizer, undefined, { admin: true })
+  const saved = h.one('SELECT platforms, game_details, nominated_by FROM games WHERE session_id = ?', preview.id)
+  assert.deepEqual({ ...saved }, { platforms: '["pc","switch"]', game_details: '{"notes":"Free on Steam this week."}', nominated_by: organizer })
 })
 
 test('availability is replaceable, invalid slots preserve the ballot, and RSVP limits are atomic', async () => {

@@ -2,7 +2,7 @@ import { syncEvents } from './events.ts'
 import { refreshBoards } from './board-refresh.ts'
 import { deliverPending } from './delivery.ts'
 import { mentions, patchReply } from './discord-api.ts'
-import { autocomplete, handleInteraction, updatesMessage, type Interaction } from './interactions.ts'
+import { autocomplete, handleInteraction, openForm, opensForm, updatesMessage, type Interaction } from './interactions.ts'
 import { publicSchedule } from './public.ts'
 import { scheduleRounds } from './schedule.ts'
 import { signedBody } from './signature.ts'
@@ -44,10 +44,11 @@ export default {
       ])
       return Response.json({ type: 8, data: { choices } })
     }
-    if (![2, 3].includes(interaction.type) || !snowflake(interaction.id) ||
+    if (![2, 3, 5].includes(interaction.type) || !snowflake(interaction.id) ||
       typeof interaction.token !== 'string' || !/^[!-~]{1,512}$/.test(interaction.token)) {
       return new Response('Unsupported interaction', { status: 400 })
     }
+    if (opensForm(interaction)) return Response.json(await openForm(env, interaction, at))
     ctx.waitUntil((async () => {
       const { message, notify } = await handleInteraction(env, interaction, at)
       const tasks = [patchReply(env, interaction.token, message)]
