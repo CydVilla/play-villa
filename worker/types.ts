@@ -121,6 +121,17 @@ export interface Delivery {
   message_id: string | null
 }
 
+export interface BoardUpdate {
+  session_id: string
+  generation: number
+  synced: number
+  next_at: number
+  lease_until: number
+  claim: string | null
+  attempts: number
+  error: string | null
+}
+
 export type Param = string | number | null
 
 export const nowSeconds = () => Math.floor(Date.now() / 1000)

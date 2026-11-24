@@ -94,6 +94,6 @@ export const gameNightCommand = {
       session, string('time', 'New date and time in the session time zone, or with a UTC offset', true, 30),
       string('alternatives', 'Comma-separated alternate dates and times', false, 300)),
     sub('cancel', 'Cancel a game night that is still upcoming or in progress', session),
-    sub('delivery-status', 'Check a game night’s announcements and reminder status', session),
+    sub('delivery-status', 'Check a game night’s announcements, reminders and board refresh', session),
   ],
 }
