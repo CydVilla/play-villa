@@ -312,7 +312,7 @@ async function edit(ctx: Context, item: Session, opts: Options) {
     deadline, ctx.now, deadline, capacity, capacity, capacity, ctx.now),
     ...offerSpots(ctx.db, item.id, ctx.now, gate),
   ])
-  return reply(result?.[0] ? 'Game night updated. View details shows the latest settings.'
+  return reply(result?.[0] ? 'Game night updated. The board and View details show the latest settings.'
     : 'The update did not apply. Check the voting deadline, cancellation status, and seats already taken or offered.', item.id)
 }
 
@@ -355,7 +355,7 @@ async function nominate(ctx: Context, item: Session, rawgId: number | null, opts
   if (!result?.[0]) return reply('The game is already listed, the ballot is full, or voting has closed.')
   const summary = gameDetailsText(gameDetails)
   const attribution = game && !gameDetails.sourceUrl ? '\n[Game data by RAWG](https://rawg.io/)' : ''
-  return reply(`Added **${escapeText(gameName)}** to the ballot.${summary ? `\n${summary}` : ''}${attribution}`)
+  return reply(`Added **${escapeText(gameName)}** to the ballot.${summary ? `\n${summary}` : ''}${attribution}`, item.id)
 }
 
 async function updateTags(ctx: Context, item: Session, opts: Options) {
@@ -378,7 +378,7 @@ async function updateTags(ctx: Context, item: Session, opts: Options) {
     `, platforms, tags.crossplay, tags.min_players, tags.max_players, JSON.stringify({ notes: note }),
     id, item.id, ctx.now, tags.min_players, tags.max_players),
   ])
-  return reply(result?.[0] ? 'Game information updated.' : 'The game or voting window changed, or the player range is invalid.')
+  return reply(result?.[0] ? 'Game information updated.' : 'The game or voting window changed, or the player range is invalid.', result?.[0] ? item.id : undefined)
 }
 
 async function rematch(ctx: Context, settings: Guild, item: Session, opts: Options) {
@@ -433,7 +433,7 @@ async function slash(ctx: Context): Promise<ActionResult> {
     const starts = parseFuture(opts.text('time'), item.timezone, ctx.now)
     if (starts <= item.deadline) throw new InputError('The proposed time must be after the voting deadline.')
     const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [addSlot(ctx.db, item.id, starts, gate, ctx.now)])
-    return reply(result?.[0] ? `Added ${timestamp(starts)} to the availability poll.` : 'This time already exists, the poll is full, or voting has closed.')
+    return reply(result?.[0] ? `Added ${timestamp(starts)} to the availability poll.` : 'This time already exists, the poll is full, or voting has closed.', result?.[0] ? item.id : undefined)
   }
   if (!mayManage(ctx, settings, item)) throw new InputError('Only an organizer or server manager can manage this game night.')
   switch (opts.action) {
@@ -470,7 +470,10 @@ async function slash(ctx: Context): Promise<ActionResult> {
         'SELECT kind, state, error FROM deliveries WHERE session_id = ? ORDER BY id DESC LIMIT 20', item.id)
       const event = await statement(ctx.db, 'SELECT event_id, generation, synced, error FROM discord_events WHERE session_id = ?', item.id)
         .first<{ event_id: string | null; generation: number; synced: number; error: string | null }>()
+      const refresh = await statement(ctx.db, 'SELECT generation, synced, error FROM board_updates WHERE session_id = ?', item.id)
+        .first<{ generation: number; synced: number; error: string | null }>()
       const status = deliveries.map(job => `**${job.kind}** · ${job.state}${job.error ? ` · ${job.error}` : ''}`)
+      if (refresh) status.push(`**Board refresh** · ${refresh.synced === refresh.generation ? 'up to date' : 'pending'}${refresh.error ? ` · ${refresh.error}` : ''}`)
       if (event) status.push(`**Discord Event** · ${event.error ?? (event.synced === event.generation ? 'synced' : 'pending')}`)
       return reply(status.join('\n').slice(0, 1900))
     }
@@ -527,17 +530,26 @@ async function component(ctx: Context): Promise<ActionResult> {
       'SELECT starts_at FROM availability WHERE session_id = ? AND user_id = ?', id, ctx.user)
     return { message: timeMenu(await details(ctx.db, item), selected.map(row => row.starts_at)) }
   }
+  // Voting for a game and marking times are separate. Remind members who did only one.
+  const hasRow = (table: 'votes' | 'availability') =>
+    statement(ctx.db, `SELECT 1 AS found FROM ${table} WHERE session_id = ? AND user_id = ? LIMIT 1`, id, ctx.user).first('found')
   if (action === 'vote' && values.length === 1) {
     const game = values[0] === 'none' ? null : positive(values[0])
     const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [vote(ctx.db, id, ctx.user, game, ctx.now, gate)])
-    return reply(result ? game === null ? 'Your vote has been cleared.' : result[0] ? 'Vote saved.' : 'The ballot has changed or closed.'
-      : 'This request was already handled.')
+    if (!result) return reply('This request was already handled.')
+    if (game === null) return reply('Your vote has been cleared.', result[0] ? id : undefined)
+    if (!result[0]) return reply('The ballot has changed or closed.')
+    return reply(await hasRow('availability') ? 'Vote saved.'
+      : 'Vote saved. Use **Available times** on the board so your schedule counts too.', id)
   }
   if (action === 'times' || action === 'clear-times') {
     if (values.length > 10 || (action === 'times' && !values.length)) throw new InputError('Choose up to ten available times.')
     const selected = action === 'clear-times' ? [] : [...new Set(values.map(positive))]
     const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => availability(ctx.db, id, ctx.user, selected, ctx.now, gate))
-    return reply(result && (!selected.length || result[1] === selected.length) ? 'Availability saved.' : 'The time list has changed or voting is closed.')
+    if (!result || (selected.length && result[1] !== selected.length)) return reply('The time list has changed or voting is closed.')
+    if (!selected.length) return reply('Availability cleared.', id)
+    return reply(await hasRow('votes') ? 'Availability saved.'
+      : 'Availability saved. Marking times doesn’t vote for a game. Use **Vote** on the board to pick one.', id)
   }
   throw new InputError('Unknown game night control.')
 }

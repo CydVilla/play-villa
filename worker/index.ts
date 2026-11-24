@@ -1,4 +1,5 @@
 import { syncEvents } from './events.ts'
+import { refreshBoards } from './board-refresh.ts'
 import { deliverPending } from './delivery.ts'
 import { mentions, patchReply } from './discord-api.ts'
 import { autocomplete, handleInteraction, updatesCreatePreview, type Interaction } from './interactions.ts'
@@ -50,7 +51,7 @@ export default {
     ctx.waitUntil((async () => {
       const { message, notify } = await handleInteraction(env, interaction, at)
       const tasks = [patchReply(env, interaction.token, message)]
-      if (notify) tasks.push(deliverPending(env, nowSeconds(), notify), syncEvents(env, nowSeconds(), notify))
+      if (notify) tasks.push(deliverPending(env, nowSeconds(), notify), syncEvents(env, nowSeconds(), notify), refreshBoards(env, nowSeconds(), notify))
       await Promise.allSettled(tasks)
     })())
     return Response.json(updatesCreatePreview(interaction) ? { type: 6 }
@@ -62,7 +63,7 @@ export default {
     try {
       await scheduleRounds(env.DB, at)
     } finally {
-      await Promise.all([deliverPending(env, at), syncEvents(env, at)])
+      await Promise.all([deliverPending(env, at), syncEvents(env, at), refreshBoards(env, at)])
     }
   },
 } satisfies ExportedHandler<Env>

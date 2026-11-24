@@ -155,13 +155,10 @@ export function board(data: Details, at: number, delivery?: Delivery): Message {
     games.length > 8 && `${games.length - 8} more games in the vote menu or companion site.`,
     ...slots.map(slot => `${timestamp(slot.starts_at)} · ${slot.available} available`),
   ].filter(Boolean)
-  // Channel boards are snapshots. The details button always reads current totals.
-  if (!delivery) {
-    const sessionId = `\nSession ID: \`${item.id}\``
-    const remaining = Math.min(1900, 4096 - highlights.join('\n').length - sessionId.length - 3)
-    if (listings.length && remaining > 0) highlights.push('', listings.join('\n').slice(0, remaining))
-    highlights.push(sessionId)
-  }
+  const sessionId = delivery ? '' : `\nSession ID: \`${item.id}\``
+  const remaining = Math.min(1900, 4096 - highlights.join('\n').length - sessionId.length - 3)
+  if (listings.length && remaining > 0) highlights.push('', listings.join('\n').slice(0, remaining))
+  if (sessionId) highlights.push(sessionId)
   const prefix = delivery?.kind === 'rescheduled' ? 'Rescheduled · '
     : delivery?.kind === 'reminder' ? 'Coming up · ' : status === 'confirmed' ? 'Confirmed · ' : ''
   return {

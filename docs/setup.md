@@ -19,6 +19,8 @@ The `/gamenight create` date and time dropdowns appear after registering the upd
 
 The private creation preview uses `0004_create_drafts.sql`. Apply it, deploy the Worker, then register the updated command so Discord shows the **verify_game** option.
 
+Live board totals use `0005_refresh_boards.sql`. Apply it before deploying the Worker. Boards posted before the upgrade start showing vote counts at their next vote, availability change, or RSVP. Register the command again to update the `/gamenight delivery-status` description.
+
 ## Enable Discord Events
 
 Grant the bot’s role **Create Events** at the server level. Then run `/gamenight configure` with **discord_events** set to true. Newly confirmed nights get a server event that links to the voice channel, or to the announcement channel if no voice channel is set. Play Villa updates that event when the night moves and closes it when the night is cancelled. Check **View details** or the companion for the event link once Discord has accepted it. [Discord Event permissions](https://docs.discord.com/developers/resources/guild-scheduled-event#guild-scheduled-event-permissions-requirements)
@@ -51,7 +53,7 @@ Create an API key in RAWG and paste it when Wrangler prompts you. [RAWG API term
 npx wrangler secret put RAWG_API_KEY --config wrangler.local.toml
 ```
 
-In the game-night channel, run `/gamenight search` with a game name in **query**. When exactly one ballot is open, pick a result to nominate it there. When several are open, choose a **session** to get the results dropdown for that ballot. With no open ballot, search previews the results and an organizer can start one with `/gamenight create` using the game name and a time. You can also copy the result ID to **rawg_id** on `/gamenight nominate` to add tags or a note before submitting. Saved details appear on the opening board for the first nominee, on **View details** for the current recommendation, and on the confirmation for the chosen game. The companion also shows saved game details when enabled.
+In the game-night channel, run `/gamenight search` with a game name in **query**. When exactly one ballot is open, pick a result to nominate it there. When several are open, choose a **session** to get the results dropdown for that ballot. With no open ballot, search previews the results and an organizer can start one with `/gamenight create` using the game name and a time. You can also copy the result ID to **rawg_id** on `/gamenight nominate` to add tags or a note before submitting. Saved details appear on the board and **View details** for the leading game, or for the first nominee before any votes, and on the confirmation for the chosen game. The companion also shows saved game details when enabled.
 
 For a game missing from RAWG, or for a server without a key, use `/gamenight nominate` with **session**, **game**, and optional **notes**. Organizers can use `/gamenight tag` with **notes** or **clear_notes** while voting is open.
 
@@ -68,7 +70,7 @@ For a shared installation, remove `DISCORD_GUILD_ID` from both `wrangler.local.t
 ## Verify a fresh installation with two Discord accounts
 
 1. As a server manager, configure a test text channel. Select a future **date** and **time** and enter an alternate slot. If RAWG is enabled, enter an exact game title and verify the private preview shows the match and time. Publish it and verify one board with game details, then check **View details** and the companion if enabled.
-2. As a member, nominate a custom game with a note. If RAWG is enabled and this is the only open ballot, search with just the game name, pick a result, and check the details in the reply. Vote, switch votes, retract, and vote again. Select both times and change the selection to one. Cycle through RSVP statuses and check **View details**.
+2. As a member, nominate a custom game with a note. If RAWG is enabled and this is the only open ballot, search with just the game name, pick a result, and check the details in the reply. Vote, switch votes, retract, and vote again. From the first account, check that the board in the channel shows each change in its vote count. Select both times and change the selection to one. Cycle through RSVP statuses and check **View details**.
 3. Check that the member cannot cancel or confirm. As the organizer, close voting, check the recommendations, and confirm with or without an override. Verify one confirmation with the saved game details, the voice link if set, and the game details and calendar export on the companion if enabled.
 4. With **capacity** set to 1, have the first account select Going and the second join the waitlist. Free the seat with Maybe. Verify the second account is tagged for the offer and can claim it. Move the night with `/gamenight reschedule`. Check that the new board asks for an RSVP and, when the companion is enabled, the calendar export uses the new time.
 5. If you enabled Discord Events, confirm that the event appears in the server’s Events tab, moves with the session, and closes when the session is cancelled.
@@ -83,6 +85,7 @@ For a shared installation, remove `DISCORD_GUILD_ID` from both `wrangler.local.t
 | Play Villa is installed, but `/gamenight` is missing | Run `npm run discord:register` from the project folder. Check that `.dev.vars` has the application and server IDs and the bot token for that app. Refresh Discord, then check the server’s app permissions and whether the member can **Use Application Commands**. |
 | Command registration returns HTTP 401 or 403 | For a 401, check the bot token. For a 403, confirm the app was installed in the same server whose ID you used and that the install included `applications.commands`. |
 | A command works, but the board is missing | Check that the Worker has the `DISCORD_BOT_TOKEN` secret and the bot has **View Channel**, **Send Messages**, **Embed Links**, and **Read Message History** in the announcement channel. Inspect `/gamenight delivery-status` for the session. |
+| Votes save, but the board’s counts don’t change | Confirm `0005_refresh_boards.sql` is applied and the bot still has **View Channel** in the announcement channel. Check the **Board refresh** entry in `/gamenight delivery-status`. Only the newest board for a night is updated; older posts keep the totals they had. |
 | A confirmed night has no Discord Event | Check **discord_events**, the bot’s **Create Events** permission, and the event entry in `/gamenight delivery-status`. |
 | Game search is disabled or has no result | Check that `RAWG_API_KEY` is a secret on the intended Worker. Try another spelling or nominate the game manually. The **session** picker lists only open ballots in the channel. |
 | RAWG is unavailable or limiting requests | Try another search later or enter the game name manually. If this persists, check the Worker logs for the upstream HTTP status or a timeout. |

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import worker from '../worker/index.ts'
+import { refreshBoards } from '../worker/board-refresh.ts'
 import { syncEvents } from '../worker/events.ts'
 import { deliverPending } from '../worker/delivery.ts'
 import { autocomplete, handleInteraction, type Interaction } from '../worker/interactions.ts'
@@ -115,6 +116,80 @@ test('nominations deduplicate normalized names and concurrent vote switches and 
   assert.equal(h.one('SELECT count(*) AS n FROM votes')?.n, 1)
 })
 
+test('shared vote totals refresh the public board after members vote', async t => {
+  const h = harness()
+  await h.configure()
+  const { id } = await h.create()
+  h.db.sqlite.prepare("UPDATE deliveries SET state = 'sent', message_id = '998000000000000001' WHERE session_id = ? AND kind = 'open'").run(id)
+  await h.click('vote', id, member, ['1'])
+  await h.click('vote', id, otherMember, ['1'])
+  const patches: Record<string, unknown>[] = []
+  const fetch = t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
+    assert.match(url, /channels\/100000000000000003\/messages\/998000000000000001$/)
+    assert.equal(options.method, 'PATCH')
+    patches.push(JSON.parse(String(options.body)))
+    return Response.json({})
+  })
+  await refreshBoards({ ...h.env, DISCORD_BOT_TOKEN: 'mock-token' }, at, id)
+  assert.equal(fetch.mock.callCount(), 1)
+  assert.match(JSON.stringify(patches[0]), /Overcooked.*2 vote\(s\)/)
+  assert.doesNotMatch(JSON.stringify(patches[0]), /Session ID/)
+  assert.deepEqual(patches[0].allowed_mentions, { parse: [] })
+  assert.equal(h.one('SELECT generation = synced AS current FROM board_updates WHERE session_id = ?', id)?.current, 1)
+  assert.match(JSON.stringify((await h.click('show', id, member)).message), /Overcooked.*2 vote\(s\)/)
+})
+
+test('board refresh waits for the post, catches votes made mid-edit, and only edits the newest board', async t => {
+  const h = harness()
+  await h.configure()
+  const { id } = await h.create()
+  const env = { ...h.env, DISCORD_BOT_TOKEN: 'mock-token' }
+  const job = () => h.one('SELECT generation > synced AS pending, next_at, error FROM board_updates WHERE session_id = ?', id)
+  const bodies: string[] = []
+  let respond = async () => Response.json({})
+  const fetch = t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
+    assert.match(url, /messages\/998000000000000001$/)
+    bodies.push(String(options.body))
+    return respond()
+  })
+
+  await h.click('vote', id, member, ['1'])
+  await refreshBoards(env, at, id)
+  assert.equal(fetch.mock.callCount(), 0)
+  assert.deepEqual({ ...job() }, { pending: 1, next_at: at + 15, error: null })
+
+  h.db.sqlite.prepare("UPDATE deliveries SET state = 'sent', message_id = '998000000000000001' WHERE session_id = ?").run(id)
+  respond = async () => {
+    respond = async () => Response.json({})
+    await h.click('vote', id, otherMember, ['1'])
+    return Response.json({})
+  }
+  await refreshBoards(env, at + 15, id)
+  assert.equal(fetch.mock.callCount(), 2)
+  assert.match(bodies[0], /1 vote\(s\)/)
+  assert.match(bodies[1], /2 vote\(s\)/)
+  assert.equal(job()?.pending, 0)
+
+  await h.click('vote', id, organizer, ['1'])
+  respond = async () => new Response('{}', { status: 429, headers: { 'Retry-After': '7' } })
+  await refreshBoards(env, at + 20, id)
+  assert.deepEqual({ ...job() }, { pending: 1, next_at: at + 27, error: 'Discord rate limit.' })
+  assert.match((await h.action('delivery-status', { session: id })).message.content!, /Board refresh\*\* · pending · Discord rate limit/)
+  await refreshBoards(env, at + 26, id)
+  assert.equal(fetch.mock.callCount(), 3)
+
+  await h.action('close', { session: id })
+  await h.click('maybe', id, member)
+  assert.equal(job()?.pending, 1)
+  await refreshBoards(env, at + 30, id)
+  assert.equal(fetch.mock.callCount(), 3)
+  assert.deepEqual({ ...job() }, { pending: 1, next_at: at + 45, error: null })
+  h.db.sqlite.prepare("UPDATE deliveries SET state = 'blocked' WHERE session_id = ? AND kind = 'closed'").run(id)
+  await refreshBoards(env, at + 45, id)
+  assert.equal(fetch.mock.callCount(), 3)
+  assert.deepEqual({ ...job() }, { pending: 0, next_at: 0, error: 'There is no posted board to refresh.' })
+})
+
 test('availability is replaceable, invalid slots preserve the ballot, and RSVP limits are atomic', async () => {
   const h = harness()
   await h.configure()
@@ -123,8 +198,11 @@ test('availability is replaceable, invalid slots preserve the ballot, and RSVP l
   assert.match(JSON.stringify(menu.message), /"max_values":2/)
   assert.match(menu.message.content!, new RegExp(`your local time[\\s\\S]*1\\. <t:${time1}:F>[\\s\\S]*2\\. <t:${time2}:F>`))
   assert.match(JSON.stringify(menu.message.components), /"label":"1\. Fri/)
-  await h.click('times', id, member, [String(time1), String(time2)])
+  assert.match((await h.click('times', id, member, [String(time1), String(time2)])).message.content!, /doesn’t vote for a game.*\*\*Vote\*\*/)
   assert.equal(h.one('SELECT count(*) AS n FROM availability')?.n, 2)
+  assert.equal((await h.click('vote', id, member, ['1'])).message.content, 'Vote saved.')
+  assert.match((await h.click('vote', id, otherMember, ['1'])).message.content!, /Vote saved\. Use \*\*Available times\*\*/)
+  assert.equal((await h.click('times', id, member, [String(time1), String(time2)])).message.content, 'Availability saved.')
   await h.click('times', id, member, [String(time2), '1234'])
   assert.equal(h.one('SELECT count(*) AS n FROM availability')?.n, 2)
   await h.click('times', id, member, [String(time2)])
@@ -136,7 +214,7 @@ test('availability is replaceable, invalid slots preserve the ballot, and RSVP l
   assert.equal(h.one("SELECT user_id FROM rsvps WHERE response = 'going'")?.user_id, otherMember)
   await h.click('declined', id, member)
   assert.equal(h.one('SELECT available FROM slot_tally WHERE starts_at = ?', time2)?.available, 0)
-  await h.click('clear-times', id, member)
+  assert.equal((await h.click('clear-times', id, member)).message.content, 'Availability cleared.')
   assert.equal(h.one('SELECT count(*) AS n FROM availability')?.n, 0)
 })
 
@@ -630,6 +708,12 @@ test('upgrading a populated D1 preserves RSVPs and Discord delivery IDs', () => 
   assert.equal(db.sqlite.prepare('SELECT next_at FROM search_limits WHERE guild_id = ?').get(server)?.next_at, at + 10)
   assert.equal(db.sqlite.prepare("SELECT needs_reconfirm FROM rsvps WHERE session_id = 'old'").get()?.needs_reconfirm, 0)
   assert.equal(db.sqlite.prepare("SELECT message_id FROM deliveries WHERE session_id = 'old'").get()?.message_id, '998000000000000001')
+  db.apply('0004_create_drafts.sql')
+  db.apply('0005_refresh_boards.sql')
+  assert.equal(db.sqlite.prepare('SELECT count(*) AS n FROM board_updates').get()?.n, 0)
+  db.sqlite.exec(`INSERT INTO votes SELECT 'old', '${member}', id FROM games WHERE session_id = 'old'`)
+  assert.deepEqual({ ...db.sqlite.prepare("SELECT generation, synced FROM board_updates WHERE session_id = 'old'").get() },
+    { generation: 1, synced: 0 })
   assert.deepEqual(db.sqlite.prepare('PRAGMA foreign_key_check').all(), [])
 })
 
