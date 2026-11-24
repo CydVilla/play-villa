@@ -92,6 +92,70 @@ export function parseStart(date: string, time: string, zone: string, now: number
   return parseFuture(`${date} ${String(hour).padStart(2, '0')}:${minutes}${offset.toUpperCase()}`, zone, now)
 }
 
+const dayNames = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+
+// Members type a day the way they would say it: Sat, tomorrow, Nov 29, 11/29 or 2026-11-29.
+// Returns the YYYY-MM-DD calendar date in the session time zone for parseStart.
+export function parseDay(input: string, zone: string, now: number, laterToday?: boolean) {
+  const text = input.trim().toLowerCase().replace(/,/g, ' ').replace(/\s+/g, ' ')
+  if (calendarDate.test(text)) return text
+  const today = new Date(Math.floor(localSeconds(now, zone) / daySeconds) * daySeconds * 1000)
+  const iso = (date: Date) => date.toISOString().slice(0, 10)
+  const plusDays = (days: number) => new Date(today.getTime() + days * daySeconds * 1000)
+  if (text === 'today' || text === 'tonight') return iso(today)
+  if (text === 'tomorrow') return iso(plusDays(1))
+  const spoken = text.replace(/^(next|this) /, '')
+  const weekday = spoken.length >= 3 ? dayNames.findIndex(name => name.startsWith(spoken)) : -1
+  if (weekday >= 0) {
+    const ahead = (weekday - (today.getUTCDay() + 6) % 7 + 7) % 7
+    return iso(plusDays(ahead === 0 && (text.startsWith('next ') || laterToday === false) ? 7 : ahead))
+  }
+  let month = -1
+  let day = 0
+  let year: number | null = null
+  const numeric = /^(\d{1,2})\/(\d{1,2})(?:\/(\d{2}|\d{4}))?$/.exec(text)
+  const named = /^(?:[a-z]+ )?(?:([a-z]{3,9})\.? (\d{1,2})(?:st|nd|rd|th)?|(\d{1,2})(?:st|nd|rd|th)? ([a-z]{3,9})\.?)(?: (\d{4}))?$/.exec(text)
+  if (numeric) {
+    month = Number(numeric[1]) - 1
+    day = Number(numeric[2])
+    year = numeric[3] ? Number(numeric[3].length === 2 ? `20${numeric[3]}` : numeric[3]) : null
+  } else if (named) {
+    const name = named[1] ?? named[4]
+    month = monthNames.findIndex(prefix => name.startsWith(prefix))
+    day = Number(named[2] ?? named[3])
+    year = named[5] ? Number(named[5]) : null
+  }
+  if (month < 0 || month > 11 || day < 1) {
+    throw new InputError('Enter a day like Sat, tomorrow, Nov 29 or 11/29.')
+  }
+  const pick = (y: number) => new Date(Date.UTC(y, month, day))
+  let date = pick(year ?? today.getUTCFullYear())
+  if (year === null && date < today) date = pick(today.getUTCFullYear() + 1)
+  if (date.getUTCMonth() !== month) throw new InputError('Enter a real calendar day.')
+  return iso(date)
+}
+
+// The suggestion form: a spoken day plus a clock time. A time needs AM/PM unless it is 24-hour
+// (13:00 or later, or written with a leading zero), so "8" is never silently 8 AM.
+export function parseDayTime(day: string, time: string, zone: string, now: number) {
+  const clock = time.trim().toLowerCase().replace(/\./g, '').replace(/\s+/g, ' ')
+  const match = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/.exec(clock)
+  if (!match || Number(match[2] ?? 0) > 59) throw new InputError('Enter a time like 8 PM, 8:30 PM or 20:30.')
+  const hour = Number(match[1])
+  if (!match[3] && hour >= 1 && hour <= 12 && !match[1].startsWith('0')) {
+    throw new InputError(`Add AM or PM to ${time.trim()}, like ${hour} PM.`)
+  }
+  const at = (laterToday?: boolean) => parseStart(parseDay(day, zone, now, laterToday), clock, zone, now)
+  try {
+    return at()
+  } catch (error) {
+    // "Sat" typed on Saturday after that time has passed means next Saturday.
+    if (error instanceof InputError && /future/.test(error.message)) return at(false)
+    throw error
+  }
+}
+
 export function dateChoices(query: string, zone: string, now: number) {
   const localDay = (at: number) => Math.floor(localSeconds(at, zone) / daySeconds) * daySeconds
   const today = localDay(now)

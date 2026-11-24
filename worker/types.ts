@@ -87,6 +87,9 @@ export interface CreateDraft {
   deadline: number
   capacity: number | null
   catalog: CatalogGame | null
+  // Member-supplied platform keys (JSON array) and note, kept with either publish choice.
+  platforms?: string
+  notes?: string
 }
 
 export interface Game extends GameTags {
@@ -96,6 +99,7 @@ export interface Game extends GameTags {
   image: string | null
   game_details: string
   votes: number
+  nominated_by?: string | null
 }
 
 export interface Slot {

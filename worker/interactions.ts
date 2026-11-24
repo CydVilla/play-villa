@@ -1,13 +1,13 @@
 import { attendance, offerSpots, reschedule } from './attendance.ts'
-import { parsePlatforms, shortlist } from './party.ts'
+import { parsePlatforms, readPlatforms, shortlist } from './party.ts'
 import { escapeText, timestamp, type Message } from './discord-api.ts'
-import { ballot, board, createPreview, gameDetailsText, rawgResults } from './presentation.ts'
+import { ballot, board, createPreview, gameDetailsText, rawgResults, suggestionForm } from './presentation.ts'
 import { allowRawg, matchRawgByName, rawgGame, searchRawg } from './rawg.ts'
 import {
   acceptsBallots, addSlot, availability, cancellable, checkedLabel, close, confirm, details, guild, manualSession,
   mutate, nomination, rows, session, statement, vote,
 } from './store.ts'
-import { canonicalZone, dateChoices, parseFuture, parseStart, parseWeekly, timeChoices, weeklyWindow } from './time.ts'
+import { canonicalZone, dateChoices, parseDayTime, parseFuture, parseStart, parseWeekly, timeChoices, weeklyWindow } from './time.ts'
 import { InputError, snowflake, type CreateDraft, type Env, type Game, type GameTags, type Guild, type RSVP, type Session, type Weekly } from './types.ts'
 
 interface Option {
@@ -26,7 +26,21 @@ export interface Interaction {
   channel?: { id: string }
   token: string
   member?: { user?: { id: string; bot?: boolean }; permissions?: string; roles?: string[] }
-  data?: { name?: string; options?: Option[]; custom_id?: string; values?: string[] }
+  data?: { name?: string; options?: Option[]; custom_id?: string; values?: string[]; components?: FormPart[] }
+}
+
+// Modal submissions nest text inputs in action rows (type 1) or labels (type 18).
+type FormPart = { custom_id?: string; value?: string; components?: FormPart[]; component?: FormPart }
+
+function formValues(interaction: Interaction) {
+  const fields = new Map<string, string>()
+  const visit = (parts: FormPart[] = []) => parts.forEach(part => {
+    if (part.custom_id && typeof part.value === 'string') fields.set(part.custom_id, part.value)
+    visit(part.components)
+    if (part.component) visit([part.component])
+  })
+  visit(interaction.data?.components)
+  return (name: string) => (fields.get(name) ?? '').replace(/\s+/g, ' ').trim()
 }
 
 type Context = {
@@ -206,7 +220,9 @@ async function create(ctx: Context, settings: Guild, opts: Options, prior?: { se
   const id = ctx.interaction.id
   const capacity = prior?.session.capacity ?? opts.number('capacity', 1, 99)
   const verifyGame = Boolean(ctx.env.RAWG_API_KEY) && opts.values.get('verify_game') !== false
-  if (!prior) return prepareDraft(ctx, { title, description, timezone: zone, slots, deadline, capacity }, verifyGame)
+  const platforms = JSON.stringify(parsePlatforms(opts.text('platforms')))
+  const notes = opts.text('notes') ? checkedLabel(opts.text('notes'), 200) : ''
+  if (!prior) return prepareDraft(ctx, { title, description, timezone: zone, slots, deadline, capacity, platforms, notes }, verifyGame)
   const result = await mutate(ctx.db, id, ctx.now, gate =>
     manualSession(ctx.db, settings, id, ctx.user, title, description, slots, deadline, capacity, ctx.now, gate, { prior }))
   if (!result) return reply('This request was already handled.')
@@ -240,11 +256,32 @@ async function prepareDraft(ctx: Context, plan: Omit<CreateDraft, 'catalog'>, ve
 
 const draftControl = /^gn:(publish-catalog|publish-typed|discard-draft):(\d{17,20})$/
 const panelControl = /^gn:(vote|times|clear-times):/
+const panelForm = /^gn:add-(game|time):/
+const formButton = /^gn:suggest-(game|time):(([a-f0-9-]{17,36})(?::\d{1,9})?)$/
 
 // These controls live on a private message and replace it in place instead of adding a reply.
 export function updatesMessage(interaction: Interaction) {
   const id = interaction.data?.custom_id ?? ''
-  return interaction.type === 3 && (draftControl.test(id) || panelControl.test(id))
+  return (interaction.type === 3 && (draftControl.test(id) || panelControl.test(id))) ||
+    (interaction.type === 5 && panelForm.test(id))
+}
+
+export const opensForm = (interaction: Interaction) =>
+  interaction.type === 3 && formButton.test(interaction.data?.custom_id ?? '')
+
+// Discord shows a form only as the immediate response, so this answers within the request.
+export async function openForm(env: Env, interaction: Interaction, now: number) {
+  const [, kind, sessionKey, id] = formButton.exec(interaction.data?.custom_id ?? '')!
+  try {
+    const ctx = scope(env, interaction, now)
+    const item = await scopedSession(ctx, id)
+    if (Number(sessionKey.split(':')[1] ?? 0) !== item.revision) throw new InputError('This game night moved. Use the newest board in the channel.')
+    votingOpen(item, now)
+    return { type: 9, data: suggestionForm(kind as 'game' | 'time', sessionKey, item.timezone) }
+  } catch (error) {
+    const content = error instanceof InputError ? error.message : 'Play Villa could not open that form. Try again in a moment.'
+    return { type: 4, data: { content, flags: 64 } }
+  }
 }
 
 async function finishDraft(ctx: Context, action: string, id: string) {
@@ -265,7 +302,10 @@ async function finishDraft(ctx: Context, action: string, id: string) {
   const catalog = action === 'publish-catalog' ? draft.catalog : null
   if (action === 'publish-catalog' && !catalog) return reply('Play Villa couldn’t verify a RAWG match. Start a new preview or publish using the typed name.')
   const title = catalog?.name ?? draft.title
-  const game = catalog ? { rawg_id: catalog.id, image: catalog.image, game_details: JSON.stringify(catalog.details) } : undefined
+  const game = {
+    rawg_id: catalog?.id, image: catalog?.image, platforms: draft.platforms, nominated_by: ctx.user,
+    game_details: JSON.stringify({ ...catalog?.details, notes: draft.notes || undefined }),
+  }
   const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => {
     // The component pattern limits the draft ID to digits. D1 batches publish and consume it atomically.
     const claim = `${gate} AND EXISTS (
@@ -352,7 +392,7 @@ async function nominate(ctx: Context, item: Session, rawgId: number | null, opts
   const gameDetails = { ...game?.details, notes: note }
   const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [
     nomination(ctx.db, item.id, gameName, ctx.now, gate, {
-      ...tags, rawg_id: game?.id, image: game?.image, game_details: JSON.stringify(gameDetails),
+      ...tags, rawg_id: game?.id, image: game?.image, game_details: JSON.stringify(gameDetails), nominated_by: ctx.user,
     }),
   ])
   if (!result?.[0]) return reply('The game is already listed, the ballot is full, or voting has closed.')
@@ -361,8 +401,10 @@ async function nominate(ctx: Context, item: Session, rawgId: number | null, opts
   return reply(`Added **${escapeText(gameName)}** to the ballot.${summary ? `\n${summary}` : ''}${attribution}`, item.id)
 }
 
-async function updateTags(ctx: Context, item: Session, opts: Options) {
-  votingOpen(item, ctx.now)
+async function updateTags(ctx: Context, settings: Guild, item: Session, opts: Options) {
+  const manager = mayManage(ctx, settings, item)
+  if (!manager) votingOpen(item, ctx.now)
+  if (item.status === 'cancelled') throw new InputError('This game night was cancelled.')
   const id = positive(opts.text('game'))
   const tags = tagOptions(opts)
   const platforms = opts.text('platforms') ? tags.platforms : null
@@ -375,13 +417,15 @@ async function updateTags(ctx: Context, item: Session, opts: Options) {
     statement(ctx.db, `
       UPDATE games SET platforms = coalesce(?, platforms), crossplay = coalesce(?, crossplay),
         min_players = coalesce(?, min_players), max_players = coalesce(?, max_players), game_details = json_patch(game_details, ?)
-      WHERE id = ? AND session_id = ? AND ${gate}
-      AND EXISTS (SELECT 1 FROM sessions WHERE id = games.session_id AND ${acceptsBallots})
+      WHERE id = ? AND session_id = ? AND ${gate} AND (? OR nominated_by = ?)
+      AND EXISTS (SELECT 1 FROM sessions WHERE id = games.session_id AND status <> 'cancelled' AND (? OR ${acceptsBallots}))
       AND coalesce(?, min_players, 1) <= coalesce(?, max_players, 99)
     `, platforms, tags.crossplay, tags.min_players, tags.max_players, JSON.stringify({ notes: note }),
-    id, item.id, ctx.now, tags.min_players, tags.max_players),
+    id, item.id, Number(manager), ctx.user, Number(manager), ctx.now, tags.min_players, tags.max_players),
   ])
-  return reply(result?.[0] ? 'Game information updated.' : 'The game or voting window changed, or the player range is invalid.', result?.[0] ? item.id : undefined)
+  if (result?.[0]) return reply('Game information updated. The board in the channel will show it.', item.id)
+  return reply('Nothing changed. Check that the player range is valid: minimum players can’t exceed maximum.' +
+    (manager ? '' : ' You can update games you suggested while voting is open; ask an organizer to change other games.'))
 }
 
 async function rematch(ctx: Context, settings: Guild, item: Session, opts: Options) {
@@ -431,6 +475,7 @@ async function slash(ctx: Context): Promise<ActionResult> {
   }
   if (opts.action === 'show') return { message: board(await details(ctx.db, item), ctx.now) }
   if (opts.action === 'nominate') return nominate(ctx, item, opts.number('rawg_id', 1, 2147483647), opts)
+  if (opts.action === 'tag') return updateTags(ctx, settings, item, opts)
   if (opts.action === 'propose-time') {
     votingOpen(item, ctx.now)
     const starts = parseFuture(opts.text('time'), item.timezone, ctx.now)
@@ -440,7 +485,6 @@ async function slash(ctx: Context): Promise<ActionResult> {
   }
   if (!mayManage(ctx, settings, item)) throw new InputError('Only an organizer or server manager can manage this game night.')
   switch (opts.action) {
-    case 'tag': return updateTags(ctx, item, opts)
     case 'reschedule': {
       const time = parseFuture(opts.text('time'), item.timezone, ctx.now)
       const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate =>
@@ -536,22 +580,59 @@ async function component(ctx: Context): Promise<ActionResult> {
   }
   // vote-menu and time-menu are the controls on boards posted before the combined panel.
   if (action === 'ballot' || action === 'vote-menu' || action === 'time-menu') return panel()
-  if (action === 'vote' && values.length === 1) {
-    const game = values[0] === 'none' ? null : positive(values[0])
-    const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [vote(ctx.db, id, ctx.user, game, ctx.now, gate)])
-    const notice = !result ? '' : game === null ? 'Your vote was cleared.' : result[0] ? '✅ Vote saved.' : '⚠️ That game is no longer on the ballot.'
-    return { ...await panel(notice), notify: result?.[0] ? id : undefined }
+  const change = async (): Promise<ActionResult> => {
+    if (action === 'vote' && values.length === 1) {
+      const game = values[0] === 'none' ? null : positive(values[0])
+      const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [vote(ctx.db, id, ctx.user, game, ctx.now, gate)])
+      const notice = !result ? '' : game === null ? 'Your vote was cleared.' : result[0] ? '✅ Vote saved.' : '⚠️ That game is no longer on the ballot.'
+      return { ...await panel(notice), notify: result?.[0] ? id : undefined }
+    }
+    if (action === 'times' || action === 'clear-times') {
+      if (values.length > 10) throw new InputError('Choose up to ten available times.')
+      const selected = action === 'clear-times' ? [] : [...new Set(values.map(positive))]
+      const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => availability(ctx.db, id, ctx.user, selected, ctx.now, gate))
+      const saved = result !== null && (!selected.length || result[1] === selected.length)
+      const notice = !result ? '' : !saved ? '⚠️ The time list changed. Pick again from the updated list.'
+        : selected.length ? `✅ Saved ${selected.length === 1 ? '1 time' : `${selected.length} times`}.` : 'Your times were cleared.'
+      return { ...await panel(notice), notify: saved ? id : undefined }
+    }
+    if (action === 'add-game') {
+      const field = formValues(ctx.interaction)
+      const typed = checkedLabel(field('name'), 100)
+      // Unknown platforms don't reject the suggestion; the member is told which to add later.
+      const { keys, unknown } = readPlatforms(field('platforms'))
+      const platforms = JSON.stringify(keys)
+      const note = field('notes') ? checkedLabel(field('notes'), 200) : undefined
+      // A RAWG outage or cooldown never blocks a suggestion; the game is added as typed.
+      const catalog = await matchRawgByName(ctx.env, ctx.guildId, ctx.now, typed).catch(() => null)
+      const name = catalog?.name ?? typed
+      const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [nomination(ctx.db, id, name, ctx.now, gate, {
+        platforms, rawg_id: catalog?.id, image: catalog?.image, nominated_by: ctx.user,
+        game_details: JSON.stringify({ ...catalog?.details, notes: note }),
+      })])
+      const skipped = unknown.length ? ` Platforms not recognised: ${escapeText(unknown.join(', '))}. Use PC, Xbox, PlayStation, Switch or Mobile with \`/gamenight tag\`.` : ''
+      const notice = !result ? '' : result[0] ? `✅ Added **${escapeText(name)}**${catalog ? ' with details from RAWG' : ''}. Vote for it below if you like it.${skipped}`
+        : '⚠️ That game is already on the ballot, or the ballot is full.'
+      return { ...await panel(notice), notify: result?.[0] ? id : undefined }
+    }
+    if (action === 'add-time') {
+      const field = formValues(ctx.interaction)
+      const starts = parseDayTime(field('day'), field('time'), item.timezone, ctx.now)
+      if (starts <= item.deadline) throw new InputError(`Suggest a time after voting closes (${timestamp(item.deadline, 'f')}).`)
+      const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [addSlot(ctx.db, id, starts, gate, ctx.now)])
+      const notice = !result ? '' : result[0] ? `✅ Added ${timestamp(starts, 'F')}. Pick it below if you can make it.`
+        : '⚠️ That time is already listed, or the list is full.'
+      return { ...await panel(notice), notify: result?.[0] ? id : undefined }
+    }
+    throw new InputError('Unknown game night control.')
   }
-  if (action === 'times' || action === 'clear-times') {
-    if (values.length > 10) throw new InputError('Choose up to ten available times.')
-    const selected = action === 'clear-times' ? [] : [...new Set(values.map(positive))]
-    const result = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => availability(ctx.db, id, ctx.user, selected, ctx.now, gate))
-    const saved = result !== null && (!selected.length || result[1] === selected.length)
-    const notice = !result ? '' : !saved ? '⚠️ The time list changed. Pick again from the updated list.'
-      : selected.length ? `✅ Saved ${selected.length === 1 ? '1 time' : `${selected.length} times`}.` : 'Your times were cleared.'
-    return { ...await panel(notice), notify: saved ? id : undefined }
+  try {
+    return await change()
+  } catch (error) {
+    // Keep the panel open so the member can correct the choice instead of starting over.
+    if (error instanceof InputError) return panel(`⚠️ ${error.message}`)
+    throw error
   }
-  throw new InputError('Unknown game night control.')
 }
 
 export async function handleInteraction(env: Env, interaction: Interaction, now: number): Promise<ActionResult> {

@@ -1,7 +1,7 @@
 import { channelLink, escapeText, timestamp, type Message } from './discord-api.ts'
 import { partyLabel } from './party.ts'
 import { recommend, type Details } from './store.ts'
-import type { CreateDraft, Delivery, GameDetails, Session } from './types.ts'
+import type { CreateDraft, Delivery, Game, GameDetails, Session } from './types.ts'
 
 const button = (custom_id: string, label: string, style = 2) => ({ type: 2, style, custom_id, label })
 const row = (...components: Record<string, unknown>[]) => ({ type: 1, components })
@@ -25,6 +25,8 @@ export function createPreview(id: string, draft: CreateDraft, expires: number): 
     catalog ? `**RAWG match** ${escapeText(catalog.name)}` : `**Game title** ${escapeText(draft.title)}`,
     catalog ? gameDetailsText(catalog.details) : 'Play Villa couldn’t verify a single RAWG match. Check the title or publish it as typed.',
     catalog && !catalog.details.sourceUrl && '[Game data by RAWG](https://rawg.io/)',
+    draft.platforms && draft.platforms !== '[]' && `**Your platforms** ${partyLabel({ platforms: draft.platforms, crossplay: null, min_players: null, max_players: null })}`,
+    draft.notes && `**Your note** ${escapeText(draft.notes)}`,
     '',
     `**Proposed times** ${draft.slots.map(slot => timestamp(slot, 'F')).join(' • ')}`,
     `**Voting closes** ${timestamp(draft.deadline)}`,
@@ -68,6 +70,15 @@ export function rawgResults(games: { id: number; name: string; details: GameDeta
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`
 
+// Member tags win. Otherwise list up to four RAWG platforms so every game shows where it runs.
+export function gameTags(game: Game) {
+  const tagged = partyLabel(game)
+  if ((JSON.parse(game.platforms) as string[]).length) return tagged
+  const rawg = (JSON.parse(game.game_details) as GameDetails).platforms ?? []
+  const listed = rawg.length > 4 ? `${rawg.slice(0, 4).join(', ')} +${rawg.length - 4}` : rawg.join(', ')
+  return [escapeText(listed), tagged].filter(Boolean).join(' · ')
+}
+
 function meter(value: number, max: number, width = 6) {
   const filled = max > 0 ? Math.round(value / max * width) : 0
   return '▰'.repeat(filled) + '▱'.repeat(width - filled)
@@ -96,13 +107,15 @@ export function ballot(data: Details, mine: MyBallot, notice = ''): Message {
     hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
   })
   const myGame = games.find(game => game.id === mine.vote)
+  const single = slots.length === 1
   const lines = [
     notice,
     `**Your vote** ${myGame ? escapeText(myGame.name) : 'Not voted yet'}`,
-    `**Your times** ${mine.times.length ? `${mine.times.length} of ${slots.length}` : 'None picked yet'}`,
-    slots.length > 0 && `\nTimes in your local time. The numbers match the list below, shown in ${item.timezone}.`,
-    ...slots.map((slot, index) => `${index + 1}. ${timestamp(slot.starts_at, 'F')} · ${slot.available} available`),
-    `Voting closes ${timestamp(item.deadline, 'R')}.`,
+    `**Your times** ${mine.times.length ? single ? 'You can make it' : `${mine.times.length} of ${slots.length}` : 'None picked yet'}`,
+    single && `\n**Time** ${timestamp(slots[0].starts_at, 'F')} · ${slots[0].available} available`,
+    slots.length > 1 && `\n**Times** in your time zone. The dropdown shows ${item.timezone}; the numbers match.`,
+    ...(single ? [] : slots.map((slot, index) => `${index + 1}. ${timestamp(slot.starts_at, 'F')} · ${slot.available} available`)),
+    `Voting closes ${timestamp(item.deadline, 'R')}. Don’t see your game or time? Suggest one below.`,
   ].filter(line => typeof line === 'string' && line)
   const components = []
   if (games.length) components.push(row({
@@ -110,22 +123,50 @@ export function ballot(data: Details, mine: MyBallot, notice = ''): Message {
     options: [
       ...games.map(game => ({
         label: label(game.name), value: String(game.id), default: mine.vote === game.id,
-        description: plural(game.votes, 'vote'),
+        description: label([plural(game.votes, 'vote'), gameTags(game).replace(/\\/g, '')].filter(Boolean).join(' · ')),
       })),
       ...(mine.vote !== null ? [{ label: 'Retract my vote', value: 'none' }] : []),
     ],
   }))
   if (slots.length) components.push(row({
-    type: 3, custom_id: key('times', item), placeholder: 'Pick every time you can make',
+    type: 3, custom_id: key('times', item), placeholder: single ? 'Can you make this time?' : 'Pick every time you can make',
     min_values: 0, max_values: slots.length,
     options: slots.map((slot, index) => ({
-      label: `${index + 1}. ${local.format(slot.starts_at * 1000)}`,
+      label: `${single ? '' : `${index + 1}. `}${local.format(slot.starts_at * 1000)}`,
       value: String(slot.starts_at),
       default: mine.times.includes(slot.starts_at),
     })),
   }))
-  if (!games.length) lines.push('No games yet. Use `/gamenight nominate` to add one.')
+  components.push(row(
+    ...(games.length < 24 ? [button(key('suggest-game', item), 'Suggest a game')] : []),
+    ...(slots.length < 10 ? [button(key('suggest-time', item), 'Suggest a time')] : []),
+  ))
+  if (!games.length) lines.push('No games yet. Use **Suggest a game** to add one.')
+  if (!(components.at(-1)?.components as unknown[]).length) components.pop()
   return { content: lines.join('\n'), components }
+}
+
+const input = (custom_id: string, label: string, placeholder: string, max_length: number, required = false, style = 1) =>
+  row({ type: 4, custom_id, label, placeholder, max_length, required, style })
+
+// Opened from the private panel; the submission updates that panel in place.
+export function suggestionForm(kind: 'game' | 'time', sessionKey: string, timezone: string) {
+  return kind === 'game' ? {
+    custom_id: `gn:add-game:${sessionKey}`,
+    title: 'Suggest a game',
+    components: [
+      input('name', 'Game', 'Exact title, e.g. Deep Rock Galactic', 100, true),
+      input('platforms', 'Platforms (optional)', 'PC, Xbox, PlayStation, Switch, Mobile', 100),
+      input('notes', 'Note (optional)', 'Where to get it, price, mods, anything else', 200, false, 2),
+    ],
+  } : {
+    custom_id: `gn:add-time:${sessionKey}`,
+    title: 'Suggest a time',
+    components: [
+      input('day', 'Day', 'Sat, tomorrow, Nov 29 or 11/29', 30, true),
+      input('time', `Time (${timezone})`.slice(0, 45), '8 PM or 20:30', 20, true),
+    ],
+  }
 }
 
 export function board(data: Details, at: number, delivery?: Delivery): Message {
@@ -138,13 +179,14 @@ export function board(data: Details, at: number, delivery?: Delivery): Message {
   const suggestedTime = item.status === 'open' ? proposal.slot?.starts_at : item.starts_at
   const featuredGame = isBallot ? suggestedGame ?? games[0] : status === 'confirmed' ? selected : undefined
   const gameDetails = featuredGame && gameDetailsText(JSON.parse(featuredGame.game_details) as GameDetails)
+  const memberTags = featuredGame && partyLabel(featuredGame)
   const lead = status === 'open' ? 'Leading' : 'Recommended'
   const mostVotes = Math.max(0, ...games.map(game => game.votes))
   const mostAvailable = Math.max(0, ...slots.map(slot => slot.available))
   const shownGames = games.slice(0, 10)
   const highlights = [
     item.description && escapeText(item.description),
-    status === 'open' && `**Voting closes** ${timestamp(item.deadline, 'R')} · ${voters} voted · ${available} picked times`,
+    status === 'open' && `**Voting closes** ${timestamp(item.deadline, 'R')} · ${voters} voted · ${available === 1 ? '1 picked a time' : `${available} picked times`}`,
     status === 'closed' && 'Voting is closed. An organizer can confirm the night.',
     status === 'cancelled' && 'This game night was cancelled.',
     delivery?.kind === 'rescheduled' && 'The start time changed. Please RSVP again on this board.',
@@ -154,14 +196,17 @@ export function board(data: Details, at: number, delivery?: Delivery): Message {
     isBallot && `**${lead} time** ${suggestedTime ? timestamp(suggestedTime) : 'No times picked yet'}`,
     isBallot && shownGames.length > 0 && '\n**Games**',
     ...(isBallot ? shownGames.map(game => {
-      const tags = partyLabel(game)
+      const tags = gameTags(game)
       return `${meter(game.votes, mostVotes)} **${escapeText(game.name)}** · ${plural(game.votes, 'vote')}${tags ? ` · ${tags}` : ''}`
     }) : []),
     isBallot && games.length > shownGames.length && `…and ${games.length - shownGames.length} more in the vote menu.`,
     isBallot && slots.length > 0 && '\n**Times** (shown in your time zone)',
     ...(isBallot ? slots.map(slot => `${meter(slot.available, mostAvailable)} ${timestamp(slot.starts_at)} · ${slot.available} available`) : []),
-    featuredGame && gameDetails && `\n**About ${escapeText(featuredGame.name)}**`,
+    featuredGame && (gameDetails || memberTags) && `\n**About ${escapeText(featuredGame.name)}**`,
+    memberTags && `**Tags** ${memberTags}`,
     gameDetails,
+    status === 'open' && featuredGame && !gameDetails && !memberTags &&
+      `\nNo details for **${escapeText(featuredGame.name)}** yet. Whoever suggested it, or an organizer, can add platforms and a note with \`/gamenight tag\`.`,
     status === 'confirmed' && (item.voice_id
       ? `[Join voice channel](${channelLink(item.guild_id, item.voice_id)})`
       : `**Meet in** <#${item.channel_id}>`),

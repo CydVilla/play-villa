@@ -5,13 +5,32 @@ const platformNames = new Map([
   ['pc', 'PC'], ['xbox', 'Xbox'], ['playstation', 'PlayStation'], ['switch', 'Switch'], ['mobile', 'Mobile'],
 ])
 
-export function parsePlatforms(input: string) {
-  if (!input) return []
-  const names = input.split(',').map(name => name.trim().toLowerCase())
-  if (!names.every(name => platformNames.has(name))) {
-    throw new InputError('Use comma-separated platform names from PC, Xbox, PlayStation, Switch, and Mobile.')
+// Accepts the names members actually type: PS5, Xbox Series X/S, PC (Steam), Game Pass, Nintendo Switch, iOS.
+const platformAliases: [RegExp, string][] = [
+  [/\b(pc|steam|windows|win|mac|macos|linux|epic)\b/, 'pc'],
+  [/xbox|game ?pass|\bseries [xs]\b/, 'xbox'],
+  [/playstation|\bps ?[1-5]?\b|\bpsn\b|\bvita\b/, 'playstation'],
+  [/switch|nintendo|\bwii\b|\b3ds\b/, 'switch'],
+  [/\b(mobile|ios|iphone|ipad|android|phone)\b/, 'mobile'],
+]
+
+// Returns recognised platform keys in the order typed, plus any entries it couldn't place.
+export function readPlatforms(input: string) {
+  const keys: string[] = []
+  const unknown: string[] = []
+  for (const part of input.toLowerCase().split(/[,+&;]|\band\b/).map(text => text.trim()).filter(Boolean)) {
+    const found = platformAliases.map(([pattern, key]) => ({ key, at: part.search(pattern) }))
+      .filter(match => match.at >= 0).sort((x, y) => x.at - y.at)
+    if (found.length) keys.push(...found.map(match => match.key))
+    else unknown.push(part)
   }
-  return [...new Set(names)]
+  return { keys: [...new Set(keys)], unknown }
+}
+
+export function parsePlatforms(input: string) {
+  const { keys, unknown } = readPlatforms(input)
+  if (unknown.length) throw new InputError('Use platforms from PC, Xbox, PlayStation, Switch and Mobile, separated by commas.')
+  return keys
 }
 
 export function partyLabel(game: GameTags) {
