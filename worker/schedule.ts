@@ -16,8 +16,8 @@ export async function scheduleRounds(db: D1Database, at: number) {
     const inserts = window.close > at && window.slots.length ? [
       statement(db, `
         INSERT INTO sessions (id, guild_id, channel_id, voice_id, week_key, title, timezone, created_at,
-          deadline, duration, reminder, minimum, capacity, auto_confirm)
-        SELECT ?, id, channel_id, voice_id, ?, 'Weekly game night', timezone, ?, ?, duration, reminder, minimum, ?, ?
+          deadline, duration, reminder, last_call, minimum, capacity, auto_confirm)
+        SELECT ?, id, channel_id, voice_id, ?, 'Weekly game night', timezone, ?, ?, duration, reminder, last_call, minimum, ?, ?
         FROM guilds WHERE id = ? AND ${gate}
         ON CONFLICT DO NOTHING
       `, id, window.key, at, window.close, weekly.capacity, Number(weekly.auto), settings.id, settings.weekly_version, at),

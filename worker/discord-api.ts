@@ -27,12 +27,15 @@ export function discord(path: string, options: {
   method?: 'GET' | 'POST' | 'PATCH'
   body?: object
   timeout?: number
-  pingUser?: string
+  // Only these users and roles are notified. Everything else in the message stays inert.
+  ping?: { users?: string[]; roles?: string[] }
 } = {}) {
   const headers = new Headers()
   if (options.token) headers.set('Authorization', `Bot ${options.token}`)
   if (options.body) headers.set('Content-Type', 'application/json')
-  const allowed = snowflake(options.pingUser) ? { ...mentions, users: [options.pingUser] } : mentions
+  const users = options.ping?.users?.filter(snowflake) ?? []
+  const roles = options.ping?.roles?.filter(snowflake) ?? []
+  const allowed = { ...mentions, ...(users.length ? { users } : {}), ...(roles.length ? { roles } : {}) }
   return fetch(apiBase + path, {
     method: options.method ?? 'GET',
     headers,

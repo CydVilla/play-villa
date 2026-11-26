@@ -24,8 +24,10 @@ export interface Guild {
   timezone: string
   voice_id: string | null
   organizer_role: string | null
+  notify_role: string | null
   minimum: number
   reminder: number
+  last_call: number
   duration: number
   discord_events: number
   weekly: string | null
@@ -48,6 +50,7 @@ export interface Session {
   deadline: number
   duration: number
   reminder: number
+  last_call: number
   minimum: number
   capacity: number | null
   game_id: number | null
@@ -112,7 +115,7 @@ export type RSVP = 'going' | 'maybe' | 'declined'
 export interface Delivery {
   id: number
   session_id: string
-  kind: 'open' | 'closed' | 'confirmed' | 'cancelled' | 'reminder' | 'rescheduled' | 'offer'
+  kind: 'open' | 'closed' | 'confirmed' | 'cancelled' | 'reminder' | 'rescheduled' | 'offer' | 'last-call'
   revision: number
   occurrence: number
   due_at: number

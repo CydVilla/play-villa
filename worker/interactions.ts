@@ -144,30 +144,41 @@ async function configure(ctx: Context, opts: Options) {
     throw new InputError('Choose an announcement channel and valid optional channels or role.')
   }
   if (role === ctx.guildId) throw new InputError('Choose a dedicated organizer role or use Manage Server.')
+  const notifyRole = opts.values.get('clear_notify_role') === true ? null
+    : opts.text('notify_role') || previous?.notify_role || null
+  if (notifyRole && !snowflake(notifyRole)) throw new InputError('Choose a valid notify role.')
+  // The guild ID is also the @everyone role. Members opt in to a dedicated role instead.
+  if (notifyRole === ctx.guildId) throw new InputError('Play Villa doesn’t mention @everyone. Choose a role members can opt in to.')
   const timezone = opts.text('timezone') ? canonicalZone(opts.text('timezone')) : previous?.timezone || 'UTC'
   const minimum = opts.number('minimum', 1, 25) ?? previous?.minimum ?? 2
   const reminder = opts.number('reminder', 0, 10080) ?? previous?.reminder ?? 60
+  const lastCall = opts.number('last_call', 0, 10080) ?? previous?.last_call ?? 180
   const duration = opts.number('duration', 15, 480) ?? previous?.duration ?? 120
   const eventOption = opts.values.get('discord_events')
   const discordEvents = typeof eventOption === 'boolean' ? Number(eventOption) : previous?.discord_events ?? 0
   const next = previous?.weekly ? nextOpening({ timezone }, JSON.parse(previous.weekly), ctx.now) : null
   const changed = await mutate(ctx.db, ctx.interaction.id, ctx.now, gate => [
     statement(ctx.db, `
-      INSERT INTO guilds (id, channel_id, timezone, voice_id, organizer_role, minimum, reminder, duration, discord_events)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${gate}
+      INSERT INTO guilds (id, channel_id, timezone, voice_id, organizer_role, notify_role, minimum, reminder, last_call,
+        duration, discord_events)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${gate}
       ON CONFLICT(id) DO UPDATE SET
         channel_id = excluded.channel_id, timezone = excluded.timezone, voice_id = excluded.voice_id,
-        organizer_role = excluded.organizer_role, minimum = excluded.minimum, reminder = excluded.reminder,
-        duration = excluded.duration, discord_events = CASE WHEN ? THEN excluded.discord_events ELSE guilds.discord_events END,
+        organizer_role = excluded.organizer_role, notify_role = excluded.notify_role, minimum = excluded.minimum,
+        reminder = excluded.reminder, last_call = excluded.last_call, duration = excluded.duration, discord_events = CASE WHEN ? THEN excluded.discord_events ELSE guilds.discord_events END,
         next_open_at = CASE WHEN guilds.timezone <> excluded.timezone THEN ? ELSE guilds.next_open_at END,
         weekly_version = CASE WHEN guilds.timezone <> excluded.timezone AND guilds.weekly IS NOT NULL
           THEN ? ELSE guilds.weekly_version END
       WHERE guilds.weekly_version IS ? AND guilds.timezone IS ?
-    `, ctx.guildId, channel, timezone, voice, role, minimum, reminder, duration, discordEvents, Number(typeof eventOption === 'boolean'), next,
+    `, ctx.guildId, channel, timezone, voice, role, notifyRole, minimum, reminder, lastCall, duration, discordEvents, Number(typeof eventOption === 'boolean'), next,
     ctx.interaction.id, previous?.weekly_version ?? null, previous?.timezone ?? null),
   ])
   const eventSetup = eventOption === true ? ' Newly confirmed nights will also appear in Discord Events when the bot has Create Events permission.' : ''
-  return reply(changed?.[0] ? `New sessions will use <#${channel}> and ${timezone}.${eventSetup}` : 'Settings may have changed. Run the command again to verify.')
+  const pings = [
+    notifyRole ? `Voting announcements will mention <@&${notifyRole}>.` : 'Voting announcements are posted without mentions.',
+    lastCall ? `A last call goes out ${lastCall} minutes before voting closes.` : 'The last call before voting closes is off.',
+  ].join(' ')
+  return reply(changed?.[0] ? `New sessions will use <#${channel}> and ${timezone}. ${pings}${eventSetup}` : 'Settings may have changed. Run the command again to verify.')
 }
 
 async function weekly(ctx: Context, settings: Guild, opts: Options) {
