@@ -1,5 +1,5 @@
 import { discord, retrySeconds } from './discord-api.ts'
-import { board, spotOffer } from './presentation.ts'
+import { board, lastCall, spotOffer } from './presentation.ts'
 import { details, rows, statement } from './store.ts'
 import { nowSeconds, snowflake, type Delivery, type Env, type Session } from './types.ts'
 
@@ -15,6 +15,8 @@ async function finish(
 
 function shouldSend(delivery: Delivery, item: Session, at: number) {
   if (delivery.revision !== item.revision) return false
+  // A changed deadline queues its own last call, keyed by that deadline.
+  if (delivery.kind === 'last-call') return item.status === 'open' && item.deadline > at && delivery.occurrence === item.deadline
   if (delivery.kind === 'reminder' || delivery.kind === 'rescheduled' || delivery.kind === 'offer') return item.status === 'confirmed' && item.starts_at! > at
   return delivery.kind === item.status
 }
@@ -46,6 +48,30 @@ async function reconcile(env: Env, delivery: Delivery, item: Session, at: number
   return finish(env, delivery, 'pending', null, 'Checking Discord for an earlier send.', at + delay)
 }
 
+// Regulars are members who voted, picked a time or RSVP'd on any of the channel's
+// previous four nights. Discord allows 100 user mentions; 50 keeps the post readable.
+async function lastCallAudience(env: Env, item: Session, role: string | null) {
+  const regulars = await rows<{ user_id: string; waiting: number }>(env.DB, `
+    WITH recent AS (
+      SELECT id FROM sessions WHERE guild_id = ? AND channel_id = ? AND id <> ? AND created_at <= ?
+      ORDER BY created_at DESC LIMIT 4
+    ), regulars AS (
+      SELECT user_id FROM votes WHERE session_id IN (SELECT id FROM recent)
+      UNION SELECT user_id FROM availability WHERE session_id IN (SELECT id FROM recent)
+      UNION SELECT user_id FROM rsvps WHERE session_id IN (SELECT id FROM recent)
+    )
+    SELECT user_id, NOT EXISTS (SELECT 1 FROM votes WHERE session_id = ? AND user_id = r.user_id)
+      AND NOT EXISTS (SELECT 1 FROM availability WHERE session_id = ? AND user_id = r.user_id) AS waiting
+    FROM regulars r ORDER BY user_id
+  `, item.guild_id, item.channel_id, item.id, item.created_at, item.id, item.id)
+  const users = regulars.filter(row => row.waiting && snowflake(row.user_id)).map(row => row.user_id).slice(0, 50)
+  // A channel's first nights have no regulars yet, so the opt-in role stands in.
+  const roles = !regulars.length && snowflake(role) ? [role] : []
+  const skip = users.length || roles.length ? null
+    : regulars.length ? 'Every recent player has voted or picked a time.' : 'No recent players or notify role to remind.'
+  return { users, roles, skip }
+}
+
 async function deliver(env: Env, id: number, at: number) {
   const delivery = await statement(env.DB, `
     UPDATE deliveries SET lease_until = ?, claim = ?, attempts = attempts + 1
@@ -64,7 +90,17 @@ async function deliver(env: Env, id: number, at: number) {
   if (delivery.kind === 'offer' && (!offer || !snowflake(offer.user_id))) {
     return finish(env, delivery, 'skipped', null, null)
   }
-  const message = offer ? spotOffer(item, delivery, offer) : board(await details(env.DB, item), at, delivery)
+  const notify = delivery.kind === 'open' || delivery.kind === 'last-call'
+    ? (await statement(env.DB, 'SELECT notify_role FROM guilds WHERE id = ?', item.guild_id)
+      .first<{ notify_role: string | null }>())?.notify_role ?? null : null
+  const audience = delivery.kind === 'last-call' ? await lastCallAudience(env, item, notify) : null
+  if (audience?.skip) return finish(env, delivery, 'skipped', null, audience.skip)
+  const ping = offer ? { users: [offer.user_id] }
+    : audience ?? (delivery.kind === 'open' && snowflake(notify) ? { roles: [notify] } : {})
+  const mention = [...(ping.roles ?? []).map(role => `<@&${role}>`), ...(ping.users ?? []).map(user => `<@${user}>`)].join(' ')
+  const message = offer ? spotOffer(item, delivery, offer)
+    : audience ? lastCall(item, delivery, mention)
+    : { ...board(await details(env.DB, item), at, delivery), ...(mention ? { content: `${mention} Voting is open. Pick a game and the times you can make.` } : {}) }
   const attemptedAt = nowSeconds()
   const marked = await statement(env.DB, `
     UPDATE deliveries SET attempted_at = ? WHERE id = ? AND claim = ? AND lease_until > ?
@@ -84,8 +120,9 @@ async function deliver(env: Env, id: number, at: number) {
     response = await discord(`/channels/${item.channel_id}/messages`, {
       token: env.DISCORD_BOT_TOKEN,
       method: 'POST',
-      pingUser: offer?.user_id,
-      body: { ...message, flags: offer ? 0 : 4096, nonce: `pv-${delivery.id}`, enforce_nonce: true },
+      ping,
+      // Only posts that mention someone may notify; the rest stay silent.
+      body: { ...message, flags: mention ? 0 : 4096, nonce: `pv-${delivery.id}`, enforce_nonce: true },
     })
   } catch {
     return finish(env, delivery, 'pending', null, 'Discord did not confirm delivery.', at + 60)

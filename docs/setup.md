@@ -23,6 +23,17 @@ Live board totals use `0005_refresh_boards.sql`. Apply it before deploying the W
 
 Panel suggestions use `0006_game_nominators.sql`, which records who suggested each game so they can edit its details. Apply it before deploying, then register the command again for the new **platforms** and **notes** options on `/gamenight create`. Games nominated before the upgrade can be edited by organizers only.
 
+Voting notifications use `0007_vote_notifications.sql`. Apply it before deploying, then register the command again for the **notify_role**, **clear_notify_role**, and **last_call** options on `/gamenight configure`. After the upgrade, new game nights send a last call 180 minutes before voting closes; nights already open don’t. To turn it off, run `/gamenight configure` with **last_call** set to `0`. No role is mentioned until you set **notify_role**. [Notify members about voting](#notify-members-about-voting)
+
+## Notify members about voting
+
+Play Villa posts silently unless it mentions someone. Two settings on `/gamenight configure` control who hears about a ballot:
+
+- **notify_role** is mentioned on the board when voting opens. Create a role members can add to themselves, for example with Discord’s onboarding questions or a role menu. In **Server Settings → Roles**, turn on **Allow anyone to @mention this role** for it. Otherwise the post shows the role but nobody is notified. Play Villa refuses @everyone. Set **clear_notify_role** to true to stop mentioning it.
+- **last_call** is how many minutes before the deadline to post a last call. The default is 180; use `0` to turn it off. The post mentions members who voted, picked a time, or RSVP’d on any of the channel’s previous four nights and haven’t voted or picked a time on this one, up to 50 people. On a channel’s first night, before anyone counts as a regular, it mentions the notify role instead. When there’s nobody to remind, it isn’t posted. Moving the deadline moves the last call. Closing voting early cancels it.
+
+Each night keeps the last-call timing it had when it opened. `/gamenight delivery-status` lists the **last-call** entry and why it was skipped.
+
 ## Enable Discord Events
 
 Grant the bot’s role **Create Events** at the server level. Then run `/gamenight configure` with **discord_events** set to true. Newly confirmed nights get a server event that links to the voice channel, or to the announcement channel if no voice channel is set. Play Villa updates that event when the night moves and closes it when the night is cancelled. Check the confirmed board or the companion for the event link once Discord has accepted it. [Discord Event permissions](https://docs.discord.com/developers/resources/guild-scheduled-event#guild-scheduled-event-permissions-requirements)
@@ -76,8 +87,9 @@ For a shared installation, remove `DISCORD_GUILD_ID` from both `wrangler.local.t
 3. Check that the member cannot cancel or confirm. As the organizer, close voting, check the recommendations, and confirm with or without an override. Verify one confirmation with the saved game details and RSVP buttons, then cycle through RSVP statuses. Check the voice link if set, and the game details and calendar export on the companion if enabled.
 4. With **capacity** set to 1, have the first account select Going and the second join the waitlist. Free the seat with Maybe. Verify the second account is tagged for the offer and can claim it. Move the night with `/gamenight reschedule`. Check that the new board asks for an RSVP and, when the companion is enabled, the calendar export uses the new time.
 5. If you enabled Discord Events, confirm that the event appears in the server’s Events tab, moves with the session, and closes when the session is cancelled.
-6. If you enable weekly scheduling, set up a short test window and confirm that one round opens. Test reminder delivery, then cancel a separate test session before its reminder and check that the reminder is suppressed. Use `/gamenight delivery-status` to see the delivery record.
-7. Cancel any open test sessions. If replacing an older client-side integration, rotate any webhook or API key that was included in a browser build before publishing the replacement.
+6. Set **notify_role** to a mentionable test role that the second account has, and **last_call** to a few minutes less than the time until the test deadline. Create a night and check that the second account is notified of the opening board, then vote from the second account. Create a second night and vote on it from the first account only. Check that its last call tags the second account and not the first.
+7. If you enable weekly scheduling, set up a short test window and confirm that one round opens. Test reminder delivery, then cancel a separate test session before its reminder and check that the reminder is suppressed. Use `/gamenight delivery-status` to see the delivery record.
+8. Cancel any open test sessions. If replacing an older client-side integration, rotate any webhook or API key that was included in a browser build before publishing the replacement.
 
 ## Troubleshooting
 
@@ -88,6 +100,8 @@ For a shared installation, remove `DISCORD_GUILD_ID` from both `wrangler.local.t
 | Command registration returns HTTP 401 or 403 | For a 401, check the bot token. For a 403, confirm the app was installed in the same server whose ID you used and that the install included `applications.commands`. |
 | A command works, but the board is missing | Check that the Worker has the `DISCORD_BOT_TOKEN` secret and the bot has **View Channel**, **Send Messages**, **Embed Links**, and **Read Message History** in the announcement channel. Inspect `/gamenight delivery-status` for the session. |
 | Votes save, but the board’s counts don’t change | Confirm `0005_refresh_boards.sql` is applied and the bot still has **View Channel** in the announcement channel. Check the **Board refresh** entry in `/gamenight delivery-status`. Only the newest board for a night is updated; older posts keep the totals they had. |
+| The opening board shows the notify role, but nobody gets a notification | In **Server Settings → Roles**, turn on **Allow anyone to @mention this role** for the notify role. Members also need the role and must not have muted the channel or server. |
+| No last call appeared | Check the **last-call** entry in `/gamenight delivery-status`. It is skipped when voting closed early, the deadline moved, or every recent player already voted or picked a time. Nights opened with **last_call** at `0`, or before the upgrade, have none. |
 | A confirmed night has no Discord Event | Check **discord_events**, the bot’s **Create Events** permission, and the event entry in `/gamenight delivery-status`. |
 | Game search is disabled or has no result | Check that `RAWG_API_KEY` is a secret on the intended Worker. Try another spelling or nominate the game manually. The **session** picker lists only open ballots in the channel. |
 | RAWG is unavailable or limiting requests | Try another search later or enter the game name manually. If this persists, check the Worker logs for the upstream HTTP status or a timeout. |

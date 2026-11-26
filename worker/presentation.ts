@@ -243,3 +243,17 @@ export function spotOffer(item: Session, delivery: Delivery, offer: { user_id: s
     components: [row(button(key('going', item), 'Going', 3), button(key('show', item), 'View details'))],
   }
 }
+
+// A nudge, not a board: it keeps no tally, so the live board stays the one to watch.
+export function lastCall(item: Session, delivery: Delivery, mention: string): Message {
+  return {
+    content: mention,
+    embeds: [{
+      title: `Last call · ${escapeText(item.title)}`,
+      description: `Voting closes ${timestamp(item.deadline, 'R')}. Pick a game and the times you can make so the plan includes you.`,
+      color: 0x35d99b,
+      footer: { text: `Play Villa · ${delivery.id}` },
+    }],
+    components: [row(button(key('ballot', item), 'Vote & pick times', 1))],
+  }
+}

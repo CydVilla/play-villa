@@ -102,9 +102,9 @@ export function manualSession(
   return [
     statement(db, `
       INSERT INTO sessions (id, guild_id, channel_id, voice_id, organizer_id, title, description,
-        timezone, created_at, deadline, duration, reminder, minimum, capacity)
+        timezone, created_at, deadline, duration, reminder, last_call, minimum, capacity)
       SELECT ?, id, channel_id, CASE WHEN ? THEN ? ELSE voice_id END, ?, ?, ?, coalesce(?, timezone), ?, ?,
-        coalesce(?, duration), coalesce(?, reminder), minimum, ?
+        coalesce(?, duration), coalesce(?, reminder), last_call, minimum, ?
       FROM guilds WHERE id = ? AND channel_id = ? AND timezone = ? AND ${gate}
     `, id, Number(Boolean(prior)), prior?.session.voice_id ?? null, organizer, title, description, prior?.session.timezone ?? null,
       at, deadline, prior?.session.duration ?? null, prior?.session.reminder ?? null, capacity, settings.id, settings.channel_id, settings.timezone),

@@ -839,7 +839,104 @@ test('upgrading a populated D1 preserves RSVPs and Discord delivery IDs', () => 
   db.sqlite.exec(`INSERT INTO votes SELECT 'old', '${member}', id FROM games WHERE session_id = 'old'`)
   assert.deepEqual({ ...db.sqlite.prepare("SELECT generation, synced FROM board_updates WHERE session_id = 'old'").get() },
     { generation: 1, synced: 0 })
+  db.apply('0006_game_nominators.sql')
+  db.apply('0007_vote_notifications.sql')
+  assert.equal(db.sqlite.prepare("SELECT message_id FROM deliveries WHERE session_id = 'old'").get()?.message_id, '998000000000000001')
+  assert.deepEqual({ ...db.sqlite.prepare('SELECT notify_role, last_call FROM guilds').get() }, { notify_role: null, last_call: 180 })
+  // A night that was already open before the upgrade gets no surprise last call.
+  assert.equal(db.sqlite.prepare("SELECT last_call FROM sessions WHERE id = 'old'").get()?.last_call, 0)
+  db.sqlite.exec(`
+    INSERT INTO sessions (id, guild_id, channel_id, title, timezone, created_at, deadline, duration, reminder, last_call, minimum)
+    VALUES ('new', '${server}', '${channel}', 'New night', 'UTC', ${at}, ${at + 86400}, 120, 60, 180, 2);
+  `)
+  assert.deepEqual(db.sqlite.prepare("SELECT kind, occurrence, due_at FROM deliveries WHERE session_id = 'new' ORDER BY id").all()
+    .map(row => ({ ...row })), [
+    { kind: 'open', occurrence: 0, due_at: at },
+    { kind: 'last-call', occurrence: at + 86400, due_at: at + 86400 - 10800 },
+  ])
   assert.deepEqual(db.sqlite.prepare('PRAGMA foreign_key_check').all(), [])
+})
+
+test('voting opens with the opt-in role, and the last call mentions only regulars who haven’t voted', async t => {
+  const h = harness()
+  const notify = '100000000000000011'
+  assert.match((await h.action('configure', { channel, notify_role: server })).message.content!, /doesn’t mention @everyone/)
+  assert.match((await h.action('configure', { channel, timezone: 'UTC', organizer_role: role, notify_role: notify })).message.content!,
+    /mention <@&100000000000000011>\. A last call goes out 180 minutes/)
+  const env = { ...h.env, DISCORD_BOT_TOKEN: 'mock-token' }
+  type Post = { content?: string; flags: number; allowed_mentions: object; embeds: { title: string }[]; components: unknown[] }
+  const posts: Post[] = []
+  t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
+    posts.push(JSON.parse(String(options.body)))
+    return Response.json({ id: '998000000000000001' })
+  })
+  t.mock.timers.enable({ apis: ['Date'], now: new Date(at * 1000) })
+  const lastCalls = (id: string) => h.db.sqlite.prepare(`
+    SELECT due_at, state, error FROM deliveries WHERE session_id = ? AND kind = 'last-call' ORDER BY id
+  `).all(id).map(row => ({ ...row }))
+  const deliverAt = async (time: number, id: string) => {
+    t.mock.timers.setTime(time * 1000)
+    await deliverPending(env, time, id)
+  }
+
+  // The channel's first night has no regulars yet, so both posts mention the opt-in role.
+  const first = await h.create()
+  await deliverAt(at, first.id)
+  assert.equal(posts[0].content, `<@&${notify}> Voting is open. Pick a game and the times you can make.`)
+  assert.deepEqual(posts[0].allowed_mentions, { parse: [], roles: [notify] })
+  assert.equal(posts[0].flags, 0)
+  await h.click('vote', first.id, member, ['1'])
+  await h.click('times', first.id, otherMember, [String(time1)])
+  const deadline = (await h.get(first.id))!.deadline
+  assert.deepEqual(lastCalls(first.id), [{ due_at: deadline - 10800, state: 'pending', error: null }])
+  await deliverAt(deadline - 10801, first.id)
+  assert.equal(posts.length, 1)
+  await deliverAt(deadline - 10800, first.id)
+  assert.equal(posts[1].content, `<@&${notify}>`)
+  assert.match(posts[1].embeds[0].title, /^Last call · Overcooked/)
+  assert.match(JSON.stringify(posts[1].components), new RegExp(`gn:ballot:${first.id}`))
+
+  // Afterwards, only regulars who haven't voted or picked a time are mentioned, and not the role.
+  const second = await h.create({}, { now: deadline })
+  await deliverAt(deadline, second.id)
+  await h.click('times', second.id, member, [String(time1)], { now: deadline })
+  // Moving the deadline replaces the last call; the one for the old deadline is skipped.
+  await h.action('edit', { session: second.id, deadline: '2026-11-20 18:00Z' }, { now: deadline })
+  const moved = parseTime('2026-11-20 18:00Z', 'UTC')
+  assert.deepEqual(lastCalls(second.id).map(row => row.due_at), [time1 - 60 - 10800, moved - 10800])
+  const before = posts.length
+  await deliverAt(moved - 10800, second.id)
+  assert.equal(posts.length, before + 1)
+  assert.equal(posts.at(-1)!.content, `<@${otherMember}>`)
+  assert.deepEqual(posts.at(-1)!.allowed_mentions, { parse: [], users: [otherMember] })
+  assert.equal(posts.at(-1)!.flags, 0)
+  await deliverAt(time1 - 60 - 10800, second.id)
+  assert.equal(posts.length, before + 1)
+  assert.deepEqual(lastCalls(second.id).map(row => row.state), ['skipped', 'sent'])
+  assert.match((await h.action('delivery-status', { session: second.id }, { now: moved - 10800 })).message.content!, /last-call\*\* · sent/)
+
+  // A night closed early, or one where every regular already took part, posts no last call.
+  const third = await h.create({ deadline: '2026-11-20 19:00Z' }, { now: moved - 10800 })
+  const fourth = await h.create({ deadline: '2026-11-20 19:00Z' }, { now: moved - 10800 })
+  await h.action('close', { session: third.id }, { now: moved - 10800 })
+  const game = String(h.one('SELECT id FROM games WHERE session_id = ?', fourth.id)?.id)
+  for (const user of [member, otherMember]) await h.click('vote', fourth.id, user, [game], { now: moved - 10800 })
+  const due = parseTime('2026-11-20 19:00Z', 'UTC') - 10800
+  await deliverAt(due, third.id)
+  await deliverAt(due, fourth.id)
+  assert.equal(posts.filter(post => /^Last call/.test(post.embeds[0].title)).length, 2)
+  assert.deepEqual(lastCalls(third.id).map(row => row.state), ['skipped'])
+  assert.deepEqual(lastCalls(fourth.id), [{ due_at: due, state: 'skipped', error: 'Every recent player has voted or picked a time.' }])
+
+  // Clearing the role and turning off the last call returns to silent posts.
+  assert.match((await h.action('configure', { clear_notify_role: true, last_call: 0 })).message.content!,
+    /without mentions\. The last call before voting closes is off/)
+  const quiet = await h.create({ deadline: '2026-11-20 19:00Z' }, { now: due })
+  await deliverAt(due, quiet.id)
+  assert.equal(posts.at(-1)!.content, undefined)
+  assert.deepEqual(posts.at(-1)!.allowed_mentions, { parse: [] })
+  assert.equal(posts.at(-1)!.flags, 4096)
+  assert.deepEqual(lastCalls(quiet.id), [])
 })
 
 test('rescheduling keeps the game and session, invalidates old RSVP buttons, and replaces the reminder', async t => {

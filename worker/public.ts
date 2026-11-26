@@ -50,7 +50,7 @@ export async function publicSchedule(env: Env, request: Request, at: number) {
         FROM rsvps WHERE session_id = s.id GROUP BY status
       )) AS response_counts,
       (SELECT message_id FROM deliveries WHERE session_id = s.id AND state = 'sent'
-        AND kind NOT IN ('reminder', 'offer') ORDER BY id DESC LIMIT 1) AS message_id
+        AND kind NOT IN ('reminder', 'offer', 'last-call') ORDER BY id DESC LIMIT 1) AS message_id
     FROM (SELECT * FROM current UNION ALL SELECT * FROM history) s
   `, id, channel, at, at, id, channel, at)
   headers.set('Cache-Control', 'public, max-age=15')

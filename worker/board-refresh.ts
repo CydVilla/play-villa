@@ -27,7 +27,7 @@ async function refresh(env: Env, at: number, sessionId: string) {
   // Only the newest board for this revision is edited. Older boards keep their
   // snapshot, so a closed or rescheduled night never shows two live tallies.
   const delivery = await statement(env.DB, `
-    SELECT * FROM deliveries WHERE session_id = ? AND revision = ? AND kind NOT IN ('reminder', 'offer')
+    SELECT * FROM deliveries WHERE session_id = ? AND revision = ? AND kind NOT IN ('reminder', 'offer', 'last-call')
     ORDER BY id DESC LIMIT 1
   `, sessionId, item.revision).first<Delivery>()
   if (delivery?.state === 'pending') {
